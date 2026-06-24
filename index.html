@@ -480,7 +480,20 @@ if(SR){
   coreLabel.textContent='vocal non supporté';
 }
 
+// iOS bloque la synthèse vocale tant qu'elle n'a pas été "amorcée" par un
+// geste tactile. On amorce une seule fois, au premier appui sur le micro.
+let audioUnlocked = false;
+function unlockAudio(){
+  if(audioUnlocked || !synth) return;
+  // une utterance quasi vide, déclenchée par le tap = autorisation iOS
+  const u = new SpeechSynthesisUtterance(' ');
+  u.volume = 0; // inaudible
+  synth.speak(u);
+  audioUnlocked = true;
+}
+
 coreEl.addEventListener('click',()=>{
+  unlockAudio(); // <-- débloque le son côté iOS (geste tactile)
   if(!SR){ addMsg('system','Reconnaissance vocale non disponible sur ce navigateur. Utilise Safari sur iPhone.', false); return; }
   if(speaking){ stopSpeak(); }
   if(listening){ recog.stop(); return; }
