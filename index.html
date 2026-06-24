@@ -231,10 +231,10 @@
   <div class="set-wrap">
     <div class="set-block">
       <h2>Connexion</h2>
-      <p class="hint">Ta clé API Claude est stockée uniquement sur cet appareil. Elle ne quitte jamais ton téléphone vers un serveur tiers.</p>
+      <p class="hint">Ta clé API Google Gemini est stockée uniquement sur cet appareil. Récupère-la gratuitement sur aistudio.google.com (aucune carte bancaire requise).</p>
       <div class="field">
-        <label>Clé API Anthropic</label>
-        <input type="password" id="apikey" placeholder="sk-ant-..." autocomplete="off">
+        <label>Clé API Google Gemini</label>
+        <input type="password" id="apikey" placeholder="AIza..." autocomplete="off">
       </div>
       <div class="warn-box" style="margin-top:12px">
         ⚠️ Version de test. Ne publie pas cette app en ligne avec ta clé : sur une page publique elle serait visible. Pour la mise en ligne, on ajoutera un proxy.
@@ -372,8 +372,10 @@ function restoreHistory(){
 }
 
 /* ============================================================
-   APPEL API CLAUDE
+   APPEL API GEMINI (Google AI Studio — palier gratuit)
    ============================================================ */
+const GEMINI_MODEL = 'gemini-2.5-flash';
+
 async function askClaude(userText){
   const key = store.key;
   if(!key){
@@ -381,32 +383,37 @@ async function askClaude(userText){
     speak("Aucune clé configurée. Va dans les réglages.");
     return;
   }
-  const messages = store.history.map(m=>({role:m.role, content:m.content}));
+
+  // Gemini attend un format différent : roles "user"/"model", et le system
+  // prompt passe dans un champ "system_instruction" séparé.
+  const contents = store.history.map(m=>({
+    role: m.role==='assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }]
+  }));
 
   showTyping();
   setCore('idle','traitement…');
   try{
-    const res = await fetch('https://api.anthropic.com/v1/messages',{
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent';
+    const res = await fetch(url,{
       method:'POST',
       headers:{
         'Content-Type':'application/json',
-        'x-api-key':key,
-        'anthropic-version':'2023-06-01',
-        'anthropic-dangerous-direct-browser-access':'true'
+        'x-goog-api-key':key
       },
       body:JSON.stringify({
-        model:'claude-sonnet-4-6',
-        max_tokens:1024,
-        system:store.persona,
-        messages
+        system_instruction:{ parts:[{ text: store.persona }] },
+        contents,
+        generationConfig:{ maxOutputTokens:1024, temperature:0.9 }
       })
     });
     hideTyping();
     if(!res.ok){
       const errTxt = await res.text();
       let msg = 'Erreur '+res.status;
-      if(res.status===401) msg='Clé API invalide. Vérifie-la dans Réglages.';
-      else if(res.status===429) msg='Trop de requêtes, réessaie dans un instant.';
+      if(res.status===400) msg='Clé API invalide ou mal copiée. Vérifie-la dans Réglages.';
+      else if(res.status===403) msg='Clé refusée. Vérifie qu\'elle est bien active.';
+      else if(res.status===429) msg='Quota gratuit atteint pour le moment. Réessaie dans une minute.';
       addMsg('assistant', msg);
       speak(msg);
       console.error(errTxt);
@@ -414,8 +421,12 @@ async function askClaude(userText){
       return;
     }
     const data = await res.json();
-    const reply = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join(' ').trim()
-                  || "Je n'ai rien à dire là-dessus.";
+    // Gemini renvoie : candidates[0].content.parts[].text
+    let reply = '';
+    try{
+      reply = (data.candidates[0].content.parts||[]).map(p=>p.text||'').join(' ').trim();
+    }catch(e){ reply=''; }
+    if(!reply) reply = "Je n'ai rien à dire là-dessus.";
     addMsg('assistant', reply);
     speak(reply);
   }catch(e){
