@@ -258,6 +258,37 @@
     </div>
 
     <div class="set-block">
+      <h2>Carnet de contacts</h2>
+      <p class="hint">Un contact par ligne, format « Nom : numéro ». JARVIS pourra les appeler ou leur envoyer un SMS par leur nom. Ces infos restent sur cet appareil.</p>
+      <div class="field">
+        <label>Contacts</label>
+        <textarea id="contacts" placeholder="Maman : 0612345678
+Djamila : 0698765432
+Papa : 0601020304"></textarea>
+      </div>
+    </div>
+
+    <div class="set-block">
+      <h2>Mémoire longue</h2>
+      <p class="hint">La fiche est ce que JARVIS sait toujours sur toi. Les souvenirs sont ce qu'il a retenu quand tu lui as dit « retiens que... ». Tout reste sur cet appareil.</p>
+      <div class="field">
+        <label>Fiche (infos permanentes)</label>
+        <textarea id="memofiche" placeholder="Je m'appelle Jibril, étudiant en informatique à Lyon. Je fais de la randonnée dans le Vercors et de la muscu à la Basic Fit."></textarea>
+      </div>
+      <div class="field" style="margin-top:13px;">
+        <label>Réinjection des souvenirs</label>
+        <select id="memomode">
+          <option value="complet">Complet — tous les souvenirs à chaque fois (fiable)</option>
+          <option value="motscles">Mots-clés — seulement les souvenirs liés à la question</option>
+        </select>
+      </div>
+      <div style="margin-top:13px;">
+        <label style="display:block;font-size:10px;letter-spacing:0.1em;color:var(--text-dim);text-transform:uppercase;margin-bottom:6px;">Souvenirs retenus</label>
+        <div id="memo-list" style="display:flex;flex-direction:column;gap:6px;"></div>
+      </div>
+    </div>
+
+    <div class="set-block">
       <h2>Voix</h2>
       <div class="field">
         <label>Voix de synthèse</label>
@@ -310,13 +341,24 @@ CAPACITÉS D'ACTION : tu peux contrôler l'iPhone de Jibril. Quand il demande un
 - [ACTION:facetime:NUMERO] — appel FaceTime.
 - [ACTION:shortcut:NOM] ou [ACTION:shortcut:NOM|TEXTE] — lancer un raccourci iOS créé par Jibril. Ex: "Je le lance. [ACTION:shortcut:Minuteur 10 min]"
 
-Règles : n'utilise un marqueur QUE si Jibril demande explicitement une action. Pour une simple question, réponds normalement sans marqueur. Un seul marqueur par réponse. Si une info manque (ex: un numéro), demande-la au lieu d'inventer.`;
+MÉMOIRE LONGUE : tu peux retenir des infos durables uniquement quand Jibril le demande explicitement ("retiens que...", "souviens-toi que...", "note que...") et en oublier quand il le demande ("oublie que...", "supprime...").
+- Pour retenir : termine par [MEMO:ADD:l'information à retenir, formulée de façon concise]. Ex: "C'est noté. [MEMO:ADD:anniversaire de Djamila le 12 mai]"
+- Pour oublier : termine par [MEMO:DEL:mots identifiant le souvenir à supprimer]. Ex: "Je l'oublie. [MEMO:DEL:anniversaire Djamila]"
+N'utilise ces marqueurs QUE sur demande explicite de mémorisation/oubli. Ne retiens jamais de toi-même. Un seul marqueur par réponse au total (action OU mémo).`;
 
 const store = {
   get key(){ return localStorage.getItem('jarvis_apikey') || ''; },
   set key(v){ localStorage.setItem('jarvis_apikey', v); },
   get tavilyKey(){ return localStorage.getItem('jarvis_tavily') || ''; },
   set tavilyKey(v){ localStorage.setItem('jarvis_tavily', v); },
+  get contacts(){ return localStorage.getItem('jarvis_contacts') || ''; },
+  set contacts(v){ localStorage.setItem('jarvis_contacts', v); },
+  get memoFiche(){ return localStorage.getItem('jarvis_memofiche') || ''; },
+  set memoFiche(v){ localStorage.setItem('jarvis_memofiche', v); },
+  get memoAuto(){ try{return JSON.parse(localStorage.getItem('jarvis_memoauto'))||[]}catch{return[]} },
+  set memoAuto(v){ localStorage.setItem('jarvis_memoauto', JSON.stringify(v)); },
+  get memoMode(){ return localStorage.getItem('jarvis_memomode') || 'complet'; }, // 'complet' | 'motscles'
+  set memoMode(v){ localStorage.setItem('jarvis_memomode', v); },
   get persona(){ return localStorage.getItem('jarvis_persona') || DEFAULT_PERSONA; },
   set persona(v){ localStorage.setItem('jarvis_persona', v); },
   get voice(){ return localStorage.getItem('jarvis_voice') || ''; },
@@ -464,11 +506,45 @@ function buildContents(userText){
   }));
 }
 
+// Construit le bloc mémoire à injecter, selon le mode choisi.
+// 'complet' : toute la mémoire. 'motscles' : seulement les souvenirs dont
+// un mot significatif apparaît dans la question (tri en JS, 0 appel = 0 quota).
+function buildMemoryBlock(userText){
+  let block = '';
+  if(store.memoFiche.trim()){
+    block += 'À SAVOIR sur Jibril (permanent) :\n'+store.memoFiche.trim()+'\n';
+  }
+  const memos = store.memoAuto;
+  if(memos.length){
+    let selected = memos;
+    if(store.memoMode==='motscles'){
+      // mots de la question, longueur > 3, en minuscules sans ponctuation
+      const words = userText.toLowerCase().replace(/[.,!?;:'"]/g,' ').split(/\s+/).filter(w=>w.length>3);
+      selected = memos.filter(mem=>{
+        const low = mem.toLowerCase();
+        return words.some(w=>low.includes(w));
+      });
+    }
+    if(selected.length){
+      block += 'SOUVENIRS pertinents (que Jibril t\'a demandé de retenir) :\n';
+      selected.forEach(m=>{ block += '- '+m+'\n'; });
+    }
+  }
+  return block.trim();
+}
+
 // Un appel Gemini générique. Renvoie {ok, reply, status}.
-async function callGemini(contents){
+async function callGemini(contents, userText){
   const key = store.key;
   const today = new Date().toISOString().slice(0,10);
   let systemText = store.persona + ACTION_INSTRUCTIONS;
+  if(store.contacts.trim()){
+    systemText += `\n\nCARNET DE CONTACTS de Jibril (utilise ces numéros quand il demande d'appeler ou d'envoyer un SMS à l'un d'eux, sans redemander le numéro) :\n${store.contacts.trim()}`;
+  }
+  const memBlock = buildMemoryBlock(userText||'');
+  if(memBlock){
+    systemText += `\n\n${memBlock}`;
+  }
   if(searchEnabled()){
     systemText += `\n\nRECHERCHE WEB : on est le ${today}. Si répondre nécessite des infos récentes ou temps réel que tu n'as pas (actualité, météo, prix, sport, événements récents), n'invente pas : place en TOUT DÉBUT de réponse le marqueur [SEARCH:requête courte 3-8 mots] et rien d'autre après. Une recherche sera faite et tu répondras ensuite. Si tu peux répondre sans recherche, fais-le normalement sans marqueur.`;
   }
@@ -506,11 +582,27 @@ function quotaMessage(status){
   return 'Erreur '+status+'. Réessaie.';
 }
 
+let lastReply = ''; // mémorise la dernière réponse pour la commande "répète" (0 quota)
+
 async function askClaude(userText){
   const key = store.key;
   if(!key){
     addMsg('assistant',"Aucune clé API configurée. Va dans Réglages pour en ajouter une.");
     speak("Aucune clé configurée. Va dans les réglages.");
+    return;
+  }
+
+  // --- Commande "répète" : relit la dernière réponse SANS appeler Gemini (0 quota) ---
+  const t = userText.trim().toLowerCase().replace(/[.!?]/g,'');
+  const repeatCmds = ['répète','repete','répète ça','repete ca','redis','redis ça','tu peux répéter','répéter','repeter','encore'];
+  if(repeatCmds.includes(t)){
+    if(lastReply){
+      addMsg('system','(répétition)', false);
+      speak(lastReply);
+    }else{
+      const m='Je n\'ai rien à répéter pour le moment.';
+      addMsg('assistant', m); speak(m);
+    }
     return;
   }
 
@@ -521,7 +613,7 @@ async function askClaude(userText){
   let contents = buildContents(userText);
 
   // 1er appel Gemini
-  let r = await callGemini(contents);
+  let r = await callGemini(contents, userText);
   if(!r.ok){
     hideTyping();
     const msg = quotaMessage(r.status);
@@ -545,7 +637,7 @@ async function askClaude(userText){
       lastC.parts[0].text = userText +
         '\n\n[Informations web récentes — utilise-les, ignore le hors sujet]\n' + ctx;
     }
-    const r2 = await callGemini(contents);
+    const r2 = await callGemini(contents, userText);
     if(r2.ok && r2.reply){
       reply = r2.reply.replace(/\[SEARCH:[^\]]+\]/ig,'').trim();
     }else{
@@ -557,9 +649,13 @@ async function askClaude(userText){
   hideTyping();
   if(!reply) reply = "Je n'ai rien à dire là-dessus.";
 
+  // --- Traitement des marqueurs mémoire [MEMO:ADD:...] / [MEMO:DEL:...] ---
+  reply = handleMemory(reply);
+
   // Détecte et exécute une éventuelle action iOS, nettoie le texte.
   const result = handleActions(reply);
   addMsg('assistant', result.text);
+  lastReply = result.text; // mémorise pour la commande "répète"
   speak(result.text);
 
   // mémorise l'heure du dernier échange (pour la détection de session)
@@ -614,6 +710,43 @@ function buildActionURL(type, value){
 
 // Détecte un marqueur d'action dans la réponse, l'exécute, et renvoie
 // le texte nettoyé (sans le marqueur) à lire à voix haute.
+// Traite les marqueurs mémoire dans la réponse. Ajoute/supprime des souvenirs
+// stockés localement, puis renvoie le texte nettoyé (sans marqueur).
+function handleMemory(reply){
+  // ADD
+  const addRe = /\[MEMO:ADD:([^\]]+)\]/i;
+  const am = reply.match(addRe);
+  if(am){
+    const info = am[1].trim();
+    if(info){
+      const mem = store.memoAuto;
+      // évite les doublons exacts
+      if(!mem.some(x=>x.toLowerCase()===info.toLowerCase())){
+        mem.push(info);
+        store.memoAuto = mem;
+      }
+    }
+    reply = reply.replace(addRe,'').trim();
+    renderMemoryList(); // rafraîchit l'affichage si la vue mémoire est ouverte
+  }
+  // DEL
+  const delRe = /\[MEMO:DEL:([^\]]+)\]/i;
+  const dm = reply.match(delRe);
+  if(dm){
+    const keys = dm[1].trim().toLowerCase().split(/\s+/).filter(w=>w.length>2);
+    let mem = store.memoAuto;
+    // supprime les souvenirs qui contiennent au moins un des mots-clés
+    mem = mem.filter(x=>{
+      const low = x.toLowerCase();
+      return !keys.some(k=>low.includes(k));
+    });
+    store.memoAuto = mem;
+    reply = reply.replace(delRe,'').trim();
+    renderMemoryList();
+  }
+  return reply || 'C\'est noté.';
+}
+
 function handleActions(reply){
   const re = /\[ACTION:([a-z]+):([^\]]*)\]/i;
   const m = reply.match(re);
@@ -727,6 +860,33 @@ function stopSpeak(){ if(synth){synth.cancel(); speaking=false; setCore('idle','
 /* ============================================================
    SKILLS — rendu + toggles
    ============================================================ */
+// Affiche la liste des souvenirs auto avec un bouton suppression chacun.
+function renderMemoryList(){
+  const list = document.getElementById('memo-list');
+  if(!list) return;
+  const memos = store.memoAuto;
+  list.innerHTML='';
+  if(memos.length===0){
+    list.innerHTML='<div style="font-size:11px;color:var(--text-dim);font-style:italic;">Aucun souvenir pour l\'instant. Dis « retiens que... » à JARVIS.</div>';
+    return;
+  }
+  memos.forEach((m,i)=>{
+    const row=document.createElement('div');
+    row.style.cssText='display:flex;align-items:center;gap:8px;background:#08101e;border:1px solid var(--edge);border-radius:8px;padding:8px 10px;';
+    const txt=document.createElement('span');
+    txt.style.cssText='flex:1;font-size:12px;color:var(--text);line-height:1.4;';
+    txt.textContent=m;
+    const del=document.createElement('button');
+    del.textContent='✕';
+    del.style.cssText='background:none;border:none;color:var(--danger);cursor:pointer;font-size:14px;flex-shrink:0;padding:0 4px;';
+    del.addEventListener('click',()=>{
+      const mem=store.memoAuto; mem.splice(i,1); store.memoAuto=mem; renderMemoryList();
+    });
+    row.appendChild(txt); row.appendChild(del);
+    list.appendChild(row);
+  });
+}
+
 function renderSkills(){
   const list=document.getElementById('skills-list');
   list.innerHTML='';
@@ -764,11 +924,18 @@ function renderSkills(){
 function loadSettings(){
   document.getElementById('apikey').value = store.key;
   document.getElementById('tavilykey').value = store.tavilyKey;
+  document.getElementById('contacts').value = store.contacts;
+  document.getElementById('memofiche').value = store.memoFiche;
+  document.getElementById('memomode').value = store.memoMode;
   document.getElementById('persona').value = store.persona;
+  renderMemoryList();
 }
 document.getElementById('save-btn').addEventListener('click',()=>{
   store.key = document.getElementById('apikey').value.trim();
   store.tavilyKey = document.getElementById('tavilykey').value.trim();
+  store.contacts = document.getElementById('contacts').value.trim();
+  store.memoFiche = document.getElementById('memofiche').value.trim();
+  store.memoMode = document.getElementById('memomode').value;
   store.persona = document.getElementById('persona').value.trim() || DEFAULT_PERSONA;
   store.voice = document.getElementById('voice-select').value;
   const f=document.getElementById('save-flash');
