@@ -1,0 +1,603 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="JARVIS">
+<meta name="theme-color" content="#05080f">
+<title>JARVIS</title>
+<style>
+  :root{
+    --bg:#05080f;
+    --bg-panel:#0a1120;
+    --grid:rgba(56,189,248,0.06);
+    --cyan:#38e1ff;
+    --cyan-dim:#1a6b80;
+    --gold:#f5c451;
+    --text:#cfe6f0;
+    --text-dim:#5c7a8a;
+    --danger:#ff5c5c;
+    --ok:#3ddc97;
+    --edge:rgba(56,225,255,0.18);
+  }
+  *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;overflow:hidden;}
+  body{
+    background:var(--bg);
+    color:var(--text);
+    font-family:'SF Mono',ui-monospace,'Roboto Mono',Menlo,monospace;
+    background-image:
+      linear-gradient(var(--grid) 1px,transparent 1px),
+      linear-gradient(90deg,var(--grid) 1px,transparent 1px);
+    background-size:38px 38px;
+    display:flex;flex-direction:column;
+    padding-top:env(safe-area-inset-top);
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+
+  /* ---------- HEADER ---------- */
+  header{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px 18px 10px;
+    border-bottom:1px solid var(--edge);
+    flex-shrink:0;
+  }
+  .brand{display:flex;align-items:baseline;gap:10px;}
+  .brand h1{
+    font-size:19px;font-weight:700;letter-spacing:0.32em;
+    color:var(--cyan);text-shadow:0 0 14px rgba(56,225,255,0.45);
+  }
+  .brand .ver{font-size:9px;color:var(--text-dim);letter-spacing:0.2em;}
+  .status-dot{
+    display:flex;align-items:center;gap:7px;
+    font-size:9px;letter-spacing:0.18em;color:var(--text-dim);text-transform:uppercase;
+  }
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--cyan);
+    box-shadow:0 0 8px var(--cyan);animation:pulse 2.4s infinite;}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:0.35}}
+
+  /* ---------- VIEWS ---------- */
+  .view{flex:1;display:none;flex-direction:column;min-height:0;}
+  .view.active{display:flex;}
+
+  /* ---------- CONVERSATION ---------- */
+  #log{
+    flex:1;overflow-y:auto;padding:18px 16px 8px;
+    display:flex;flex-direction:column;gap:14px;
+    -webkit-overflow-scrolling:touch;
+  }
+  .msg{max-width:86%;font-size:13.5px;line-height:1.55;}
+  .msg .who{font-size:8.5px;letter-spacing:0.2em;text-transform:uppercase;margin-bottom:4px;opacity:0.65;}
+  .msg.user{align-self:flex-end;text-align:right;}
+  .msg.user .bubble{
+    background:rgba(245,196,81,0.08);border:1px solid rgba(245,196,81,0.25);
+    color:var(--gold);padding:10px 13px;border-radius:14px 14px 3px 14px;
+  }
+  .msg.user .who{color:var(--gold);}
+  .msg.ai .bubble{
+    background:var(--bg-panel);border:1px solid var(--edge);
+    padding:10px 13px;border-radius:14px 14px 14px 3px;
+  }
+  .msg.ai .who{color:var(--cyan);}
+  .msg.sys{align-self:center;font-size:10.5px;color:var(--text-dim);text-align:center;opacity:0.8;max-width:92%;}
+
+  .typing{display:flex;gap:5px;padding:4px 2px;}
+  .typing span{width:7px;height:7px;border-radius:50%;background:var(--cyan-dim);animation:bob 1.2s infinite;}
+  .typing span:nth-child(2){animation-delay:.18s}
+  .typing span:nth-child(3){animation-delay:.36s}
+  @keyframes bob{0%,60%,100%{transform:translateY(0);opacity:.4}30%{transform:translateY(-5px);opacity:1}}
+
+  /* ---------- MIC CORE ---------- */
+  .core-wrap{
+    flex-shrink:0;display:flex;flex-direction:column;align-items:center;
+    padding:10px 0 22px;gap:12px;
+  }
+  .heard{
+    min-height:16px;font-size:11px;color:var(--text-dim);letter-spacing:0.04em;
+    max-width:90%;text-align:center;font-style:italic;
+  }
+  .core{
+    position:relative;width:108px;height:108px;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+    border:1px solid var(--edge);background:radial-gradient(circle at 50% 40%,rgba(56,225,255,0.10),transparent 70%);
+    transition:transform .15s;
+  }
+  .core:active{transform:scale(0.94);}
+  .core .ring{
+    position:absolute;inset:0;border-radius:50%;border:1px solid var(--cyan-dim);opacity:0.5;
+  }
+  .core.idle .ring{animation:rot 14s linear infinite;}
+  .core .ring:nth-child(2){inset:10px;border-color:rgba(56,225,255,0.12);animation-direction:reverse;animation-duration:9s;}
+  @keyframes rot{to{transform:rotate(360deg)}}
+  .core .glyph{
+    width:42px;height:42px;color:var(--cyan);z-index:2;
+    filter:drop-shadow(0 0 8px rgba(56,225,255,0.6));
+  }
+  .core.listening{border-color:var(--gold);background:radial-gradient(circle at 50% 40%,rgba(245,196,81,0.18),transparent 70%);}
+  .core.listening .glyph{color:var(--gold);filter:drop-shadow(0 0 10px rgba(245,196,81,0.7));}
+  .core.listening::before{
+    content:"";position:absolute;inset:-8px;border-radius:50%;
+    border:2px solid var(--gold);opacity:0;animation:sonar 1.4s infinite;
+  }
+  .core.speaking{border-color:var(--ok);}
+  .core.speaking .glyph{color:var(--ok);}
+  @keyframes sonar{0%{transform:scale(.9);opacity:.7}100%{transform:scale(1.5);opacity:0}}
+  .core-label{font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:var(--text-dim);}
+
+  /* ---------- SKILLS VIEW ---------- */
+  .skills-head{padding:18px 18px 6px;}
+  .skills-head h2{font-size:13px;letter-spacing:0.18em;color:var(--cyan);text-transform:uppercase;margin-bottom:5px;}
+  .skills-head p{font-size:11px;color:var(--text-dim);line-height:1.5;}
+  #skills-list{flex:1;overflow-y:auto;padding:12px 14px 20px;display:flex;flex-direction:column;gap:10px;}
+  .skill{
+    display:flex;align-items:flex-start;gap:13px;
+    background:var(--bg-panel);border:1px solid var(--edge);border-radius:12px;padding:13px 14px;
+  }
+  .skill.locked{opacity:0.5;}
+  .skill-ico{font-size:20px;line-height:1;margin-top:1px;}
+  .skill-meta{flex:1;}
+  .skill-meta h3{font-size:13px;color:var(--text);margin-bottom:3px;letter-spacing:0.02em;}
+  .skill-meta p{font-size:10.5px;color:var(--text-dim);line-height:1.45;}
+  .skill-meta .soon{display:inline-block;margin-top:5px;font-size:8.5px;letter-spacing:0.14em;color:var(--gold);
+    border:1px solid rgba(245,196,81,0.3);border-radius:4px;padding:1px 6px;text-transform:uppercase;}
+  /* toggle */
+  .toggle{position:relative;width:42px;height:24px;flex-shrink:0;margin-top:2px;}
+  .toggle input{opacity:0;width:0;height:0;}
+  .track{position:absolute;inset:0;border-radius:24px;background:#16202f;border:1px solid var(--edge);transition:.2s;cursor:pointer;}
+  .track::before{content:"";position:absolute;width:16px;height:16px;border-radius:50%;left:3px;top:3px;background:var(--text-dim);transition:.2s;}
+  .toggle input:checked + .track{background:rgba(56,225,255,0.18);border-color:var(--cyan);}
+  .toggle input:checked + .track::before{transform:translateX(18px);background:var(--cyan);box-shadow:0 0 8px var(--cyan);}
+  .toggle input:disabled + .track{cursor:not-allowed;}
+
+  /* ---------- SETTINGS ---------- */
+  .set-wrap{flex:1;overflow-y:auto;padding:18px 18px 24px;display:flex;flex-direction:column;gap:18px;}
+  .set-block h2{font-size:12px;letter-spacing:0.16em;color:var(--cyan);text-transform:uppercase;margin-bottom:9px;}
+  .set-block p.hint{font-size:10.5px;color:var(--text-dim);line-height:1.5;margin-bottom:10px;}
+  .field label{display:block;font-size:10px;letter-spacing:0.1em;color:var(--text-dim);text-transform:uppercase;margin-bottom:6px;}
+  .field input,.field textarea,.field select{
+    width:100%;background:#08101e;border:1px solid var(--edge);border-radius:9px;
+    color:var(--text);font-family:inherit;font-size:13px;padding:11px 12px;outline:none;
+  }
+  .field input:focus,.field textarea:focus{border-color:var(--cyan);}
+  .field textarea{resize:vertical;min-height:74px;line-height:1.5;}
+  .field + .field{margin-top:13px;}
+  .btn{
+    width:100%;padding:13px;border-radius:9px;border:1px solid var(--cyan);
+    background:rgba(56,225,255,0.1);color:var(--cyan);font-family:inherit;
+    font-size:12px;letter-spacing:0.1em;text-transform:uppercase;cursor:pointer;margin-top:14px;
+  }
+  .btn:active{background:rgba(56,225,255,0.2);}
+  .btn.ghost{border-color:var(--text-dim);color:var(--text-dim);background:transparent;}
+  .save-flash{font-size:10px;color:var(--ok);text-align:center;margin-top:8px;height:12px;letter-spacing:0.08em;}
+  .warn-box{
+    background:rgba(255,92,92,0.06);border:1px solid rgba(255,92,92,0.3);border-radius:9px;
+    padding:11px 12px;font-size:10.5px;color:#ffb3b3;line-height:1.5;
+  }
+
+  /* ---------- NAV ---------- */
+  nav{
+    display:flex;border-top:1px solid var(--edge);flex-shrink:0;background:rgba(5,8,15,0.85);
+    backdrop-filter:blur(10px);
+  }
+  nav button{
+    flex:1;background:none;border:none;color:var(--text-dim);font-family:inherit;
+    padding:11px 0 13px;cursor:pointer;display:flex;flex-direction:column;align-items:center;gap:4px;
+    font-size:8.5px;letter-spacing:0.14em;text-transform:uppercase;
+  }
+  nav button svg{width:20px;height:20px;}
+  nav button.active{color:var(--cyan);}
+  nav button.active svg{filter:drop-shadow(0 0 6px rgba(56,225,255,0.6));}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <h1>J.A.R.V.I.S</h1>
+    <span class="ver">v1.0</span>
+  </div>
+  <div class="status-dot"><span class="dot"></span><span id="sys-status">en ligne</span></div>
+</header>
+
+<!-- ============ VUE CONVERSATION ============ -->
+<section class="view active" id="view-talk">
+  <div id="log"></div>
+  <div class="core-wrap">
+    <div class="heard" id="heard"></div>
+    <div class="core idle" id="core">
+      <div class="ring"></div><div class="ring"></div>
+      <svg class="glyph" id="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/>
+      </svg>
+    </div>
+    <div class="core-label" id="core-label">appuie pour parler</div>
+  </div>
+</section>
+
+<!-- ============ VUE SKILLS ============ -->
+<section class="view" id="view-skills">
+  <div class="skills-head">
+    <h2>Capacités</h2>
+    <p>Active uniquement ce que tu veux que JARVIS puisse faire. Chaque capacité est indépendante.</p>
+  </div>
+  <div id="skills-list"></div>
+</section>
+
+<!-- ============ VUE RÉGLAGES ============ -->
+<section class="view" id="view-settings">
+  <div class="set-wrap">
+    <div class="set-block">
+      <h2>Connexion</h2>
+      <p class="hint">Ta clé API Claude est stockée uniquement sur cet appareil. Elle ne quitte jamais ton téléphone vers un serveur tiers.</p>
+      <div class="field">
+        <label>Clé API Anthropic</label>
+        <input type="password" id="apikey" placeholder="sk-ant-..." autocomplete="off">
+      </div>
+      <div class="warn-box" style="margin-top:12px">
+        ⚠️ Version de test. Ne publie pas cette app en ligne avec ta clé : sur une page publique elle serait visible. Pour la mise en ligne, on ajoutera un proxy.
+      </div>
+    </div>
+
+    <div class="set-block">
+      <h2>Personnalité</h2>
+      <p class="hint">Comment JARVIS doit se comporter et te parler.</p>
+      <div class="field">
+        <label>Instructions système</label>
+        <textarea id="persona"></textarea>
+      </div>
+    </div>
+
+    <div class="set-block">
+      <h2>Voix</h2>
+      <div class="field">
+        <label>Voix de synthèse</label>
+        <select id="voice-select"></select>
+      </div>
+    </div>
+
+    <button class="btn" id="save-btn">Enregistrer</button>
+    <div class="save-flash" id="save-flash"></div>
+    <button class="btn ghost" id="clear-btn">Effacer la conversation</button>
+  </div>
+</section>
+
+<!-- ============ NAV ============ -->
+<nav>
+  <button class="active" data-view="talk">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/></svg>
+    Parler
+  </button>
+  <button data-view="skills">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 7h-9"/><path d="M14 17H5"/><circle cx="17" cy="17" r="3"/><circle cx="7" cy="7" r="3"/></svg>
+    Capacités
+  </button>
+  <button data-view="settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+    Réglages
+  </button>
+</nav>
+
+<script>
+'use strict';
+
+/* ============================================================
+   ÉTAT & STOCKAGE LOCAL
+   ============================================================ */
+const DEFAULT_PERSONA =
+`Tu es JARVIS, l'assistant personnel de Jibril. Tu parles français, de façon directe, vive et un peu spirituelle — sans flatterie inutile. Tu es concis : tes réponses seront lues à voix haute, donc va à l'essentiel, phrases courtes, pas de listes à puces ni de markdown. Tu t'adresses à lui avec un ton complice et efficace.`;
+
+const store = {
+  get key(){ return localStorage.getItem('jarvis_apikey') || ''; },
+  set key(v){ localStorage.setItem('jarvis_apikey', v); },
+  get persona(){ return localStorage.getItem('jarvis_persona') || DEFAULT_PERSONA; },
+  set persona(v){ localStorage.setItem('jarvis_persona', v); },
+  get voice(){ return localStorage.getItem('jarvis_voice') || ''; },
+  set voice(v){ localStorage.setItem('jarvis_voice', v); },
+  get skills(){ try{return JSON.parse(localStorage.getItem('jarvis_skills'))||{}}catch{return{}} },
+  set skills(v){ localStorage.setItem('jarvis_skills', JSON.stringify(v)); },
+  get history(){ try{return JSON.parse(localStorage.getItem('jarvis_hist'))||[]}catch{return[]} },
+  set history(v){ localStorage.setItem('jarvis_hist', JSON.stringify(v.slice(-30))); }
+};
+
+/* ============================================================
+   REGISTRE DES SKILLS (modulaire — on en branchera un par un)
+   Chaque skill : id, nom, icône, description, ready (dispo ou non)
+   ============================================================ */
+const SKILL_REGISTRY = [
+  { id:'memory',  ico:'🧠', name:'Mémoire de conversation', desc:"Se souvient du fil de la discussion en cours.", ready:true },
+  { id:'search',  ico:'🔎', name:'Recherche web',            desc:"Chercher des infos à jour sur internet.", ready:false },
+  { id:'weather', ico:'🌤️', name:'Météo',                    desc:"Donner la météo de ta position ou d'une ville.", ready:false },
+  { id:'shortcuts',ico:'⚡', name:'Raccourcis iOS',           desc:"Déclencher tes Raccourcis Apple (minuteur, musique, domotique...).", ready:false },
+  { id:'home',    ico:'🏠', name:'Maison connectée',          desc:"Piloter lumières et objets connectés.", ready:false },
+];
+
+/* ============================================================
+   NAVIGATION
+   ============================================================ */
+document.querySelectorAll('nav button').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('.view').forEach(v=>v.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('view-'+btn.dataset.view).classList.add('active');
+  });
+});
+
+/* ============================================================
+   RENDU CONVERSATION
+   ============================================================ */
+const logEl = document.getElementById('log');
+
+function addMsg(role, text, save=true){
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + (role==='user'?'user':role==='assistant'?'ai':'sys');
+  if(role==='system'){
+    wrap.textContent = text;
+  }else{
+    const who = document.createElement('div');
+    who.className='who';
+    who.textContent = role==='user'?'Jibril':'Jarvis';
+    const bub = document.createElement('div');
+    bub.className='bubble';
+    bub.textContent = text;
+    wrap.appendChild(who); wrap.appendChild(bub);
+  }
+  logEl.appendChild(wrap);
+  logEl.scrollTop = logEl.scrollHeight;
+  if(save && role!=='system'){
+    const h = store.history; h.push({role, content:text}); store.history = h;
+  }
+  return wrap;
+}
+
+function showTyping(){
+  const wrap=document.createElement('div');
+  wrap.className='msg ai'; wrap.id='typing-row';
+  wrap.innerHTML='<div class="who">Jarvis</div><div class="bubble"><div class="typing"><span></span><span></span><span></span></div></div>';
+  logEl.appendChild(wrap); logEl.scrollTop=logEl.scrollHeight;
+}
+function hideTyping(){ const t=document.getElementById('typing-row'); if(t)t.remove(); }
+
+// recharge l'historique au démarrage
+function restoreHistory(){
+  const h = store.history;
+  if(h.length===0){
+    addMsg('system','Système prêt. Configure ta clé API dans Réglages, puis appuie sur le micro.', false);
+  }else{
+    h.forEach(m=>addMsg(m.role, m.content, false));
+  }
+}
+
+/* ============================================================
+   APPEL API CLAUDE
+   ============================================================ */
+async function askClaude(userText){
+  const key = store.key;
+  if(!key){
+    addMsg('assistant',"Aucune clé API configurée. Va dans Réglages pour en ajouter une.");
+    speak("Aucune clé configurée. Va dans les réglages.");
+    return;
+  }
+  const messages = store.history.map(m=>({role:m.role, content:m.content}));
+
+  showTyping();
+  setCore('idle','traitement…');
+  try{
+    const res = await fetch('https://api.anthropic.com/v1/messages',{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'x-api-key':key,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-direct-browser-access':'true'
+      },
+      body:JSON.stringify({
+        model:'claude-sonnet-4-6',
+        max_tokens:1024,
+        system:store.persona,
+        messages
+      })
+    });
+    hideTyping();
+    if(!res.ok){
+      const errTxt = await res.text();
+      let msg = 'Erreur '+res.status;
+      if(res.status===401) msg='Clé API invalide. Vérifie-la dans Réglages.';
+      else if(res.status===429) msg='Trop de requêtes, réessaie dans un instant.';
+      addMsg('assistant', msg);
+      speak(msg);
+      console.error(errTxt);
+      setCore('idle','appuie pour parler');
+      return;
+    }
+    const data = await res.json();
+    const reply = (data.content||[]).filter(b=>b.type==='text').map(b=>b.text).join(' ').trim()
+                  || "Je n'ai rien à dire là-dessus.";
+    addMsg('assistant', reply);
+    speak(reply);
+  }catch(e){
+    hideTyping();
+    const msg='Connexion impossible. Vérifie ton réseau.';
+    addMsg('assistant', msg); speak(msg);
+    console.error(e);
+  }
+  setCore('idle','appuie pour parler');
+}
+
+/* ============================================================
+   RECONNAISSANCE VOCALE (Web Speech API)
+   ============================================================ */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let recog = null, listening = false;
+const coreEl = document.getElementById('core');
+const coreLabel = document.getElementById('core-label');
+const heardEl = document.getElementById('heard');
+
+function setCore(state, label){
+  coreEl.className = 'core ' + state;
+  if(label!==undefined) coreLabel.textContent = label;
+}
+
+if(SR){
+  recog = new SR();
+  recog.lang='fr-FR';
+  recog.interimResults=true;
+  recog.continuous=false;
+
+  recog.onstart=()=>{ listening=true; setCore('listening','je t\\'écoute…'); heardEl.textContent=''; };
+  recog.onresult=(e)=>{
+    let txt='';
+    for(let i=0;i<e.results.length;i++) txt+=e.results[i][0].transcript;
+    heardEl.textContent=txt;
+    if(e.results[e.results.length-1].isFinal){
+      const finalText=txt.trim();
+      heardEl.textContent='';
+      if(finalText){ addMsg('user',finalText); askClaude(finalText); }
+    }
+  };
+  recog.onerror=(e)=>{
+    listening=false; setCore('idle','appuie pour parler');
+    if(e.error==='not-allowed'){
+      addMsg('system','Micro refusé. Autorise le micro dans les réglages Safari.', false);
+    }
+  };
+  recog.onend=()=>{ listening=false; if(coreEl.classList.contains('listening')) setCore('idle','appuie pour parler'); };
+}else{
+  coreLabel.textContent='vocal non supporté';
+}
+
+coreEl.addEventListener('click',()=>{
+  if(!SR){ addMsg('system','Reconnaissance vocale non disponible sur ce navigateur. Utilise Safari sur iPhone.', false); return; }
+  if(speaking){ stopSpeak(); }
+  if(listening){ recog.stop(); return; }
+  try{ recog.start(); }catch(e){}
+});
+
+/* ============================================================
+   SYNTHÈSE VOCALE
+   ============================================================ */
+let speaking=false;
+const synth = window.speechSynthesis;
+let voices=[];
+
+function loadVoices(){
+  voices = synth.getVoices().filter(v=>v.lang.startsWith('fr')) ;
+  if(voices.length===0) voices = synth.getVoices();
+  const sel=document.getElementById('voice-select');
+  sel.innerHTML='';
+  voices.forEach((v,i)=>{
+    const o=document.createElement('option');
+    o.value=v.name; o.textContent=v.name+' ('+v.lang+')';
+    sel.appendChild(o);
+  });
+  if(store.voice) sel.value=store.voice;
+}
+if(synth){ loadVoices(); synth.onvoiceschanged=loadVoices; }
+
+function speak(text){
+  if(!synth) return;
+  synth.cancel();
+  const u=new SpeechSynthesisUtterance(text);
+  const chosen = voices.find(v=>v.name===store.voice) || voices.find(v=>v.lang.startsWith('fr')) || voices[0];
+  if(chosen){ u.voice=chosen; u.lang=chosen.lang; }
+  u.rate=1.03; u.pitch=1;
+  u.onstart=()=>{ speaking=true; setCore('speaking','…'); };
+  u.onend=()=>{ speaking=false; setCore('idle','appuie pour parler'); };
+  synth.speak(u);
+}
+function stopSpeak(){ if(synth){synth.cancel(); speaking=false; setCore('idle','appuie pour parler');} }
+
+/* ============================================================
+   SKILLS — rendu + toggles
+   ============================================================ */
+function renderSkills(){
+  const list=document.getElementById('skills-list');
+  list.innerHTML='';
+  const active=store.skills;
+  SKILL_REGISTRY.forEach(s=>{
+    const row=document.createElement('div');
+    row.className='skill'+(s.ready?'':' locked');
+    const isOn = s.id==='memory' ? true : !!active[s.id];
+    row.innerHTML=`
+      <div class="skill-ico">${s.ico}</div>
+      <div class="skill-meta">
+        <h3>${s.name}</h3>
+        <p>${s.desc}</p>
+        ${s.ready?'':'<span class="soon">bientôt</span>'}
+      </div>
+      <label class="toggle">
+        <input type="checkbox" data-skill="${s.id}" ${isOn?'checked':''} ${(!s.ready||s.id==='memory')?'disabled':''}>
+        <span class="track"></span>
+      </label>`;
+    list.appendChild(row);
+  });
+  list.querySelectorAll('input[data-skill]').forEach(inp=>{
+    inp.addEventListener('change',()=>{
+      const sk=store.skills; sk[inp.dataset.skill]=inp.checked; store.skills=sk;
+    });
+  });
+}
+
+/* ============================================================
+   RÉGLAGES — chargement & sauvegarde
+   ============================================================ */
+function loadSettings(){
+  document.getElementById('apikey').value = store.key;
+  document.getElementById('persona').value = store.persona;
+}
+document.getElementById('save-btn').addEventListener('click',()=>{
+  store.key = document.getElementById('apikey').value.trim();
+  store.persona = document.getElementById('persona').value.trim() || DEFAULT_PERSONA;
+  store.voice = document.getElementById('voice-select').value;
+  const f=document.getElementById('save-flash');
+  f.textContent='✓ enregistré';
+  setTimeout(()=>f.textContent='',1800);
+  document.getElementById('sys-status').textContent = store.key?'prêt':'clé manquante';
+});
+document.getElementById('clear-btn').addEventListener('click',()=>{
+  if(confirm('Effacer toute la conversation ?')){
+    store.history=[]; logEl.innerHTML='';
+    addMsg('system','Conversation effacée.', false);
+  }
+});
+
+/* ============================================================
+   AUTO-ÉCOUTE (déclenchement Siri via ?go=1)
+   Quand l'app est ouverte avec ...jarvis/?go=1, le micro démarre
+   tout seul après un court délai. C'est ce qui rend le combo
+   « Dis Siri, Jarvis » fluide : Siri ouvre l'URL, le micro s'arme.
+   ============================================================ */
+function maybeAutoListen(){
+  const params = new URLSearchParams(location.search);
+  if(params.get('go')!=='1') return;
+  if(!SR) return;
+  if(!store.key){
+    addMsg('system','Auto-écoute demandée mais aucune clé API. Ouvre Réglages.', false);
+    return;
+  }
+  // petit délai : laisse iOS finir l'ouverture + autoriser l'audio
+  setCore('idle','réveil…');
+  setTimeout(()=>{
+    // salutation courte pour confirmer qu'il est prêt (et débloque l'audio iOS)
+    const hour=new Date().getHours();
+    const greet = hour<6?'Je vous écoute.':hour<12?'Bonjour. Je vous écoute.':hour<18?'Je vous écoute.':'Bonsoir. Je vous écoute.';
+    speak(greet);
+    // lance le micro juste après la salutation
+    setTimeout(()=>{ try{ recog.start(); }catch(e){} }, 900);
+  }, 600);
+}
+
+/* ============================================================
+   INIT
+   ============================================================ */
+restoreHistory();
+renderSkills();
+loadSettings();
+document.getElementById('sys-status').textContent = store.key?'prêt':'clé manquante';
+maybeAutoListen();
+</script>
+</body>
+</html>
