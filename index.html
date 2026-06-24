@@ -293,6 +293,22 @@
 const DEFAULT_PERSONA =
 `Tu es JARVIS, l'assistant personnel de Jibril. Tu parles français, de façon directe, vive et un peu spirituelle — sans flatterie inutile. Tu es concis : tes réponses seront lues à voix haute, donc va à l'essentiel, phrases courtes, pas de listes à puces ni de markdown. Tu t'adresses à lui avec un ton complice et efficace.`;
 
+// Instructions d'action TOUJOURS ajoutées au prompt (même si la personnalité
+// est personnalisée), pour que le contrôle du téléphone marche en permanence.
+const ACTION_INSTRUCTIONS =
+`
+
+CAPACITÉS D'ACTION : tu peux contrôler l'iPhone de Jibril. Quand il demande une action, termine ta réponse parlée par UN marqueur d'action sur la même ligne, au format exact [ACTION:type:valeur]. Le marqueur ne sera pas lu à voix haute. Types disponibles :
+- [ACTION:call:NUMERO] — passer un appel. Ex: "J'appelle. [ACTION:call:0612345678]"
+- [ACTION:sms:NUMERO|MESSAGE] — SMS pré-rempli (ou [ACTION:sms:MESSAGE] sans numéro).
+- [ACTION:maps:LIEU] — ouvrir Plans. Ex: "[ACTION:maps:Tour Eiffel Paris]"
+- [ACTION:web:URL] — ouvrir une page web. Ex: "[ACTION:web:youtube.com]"
+- [ACTION:mail:DEST|SUJET|CORPS] — mail pré-rempli (sujet et corps optionnels).
+- [ACTION:facetime:NUMERO] — appel FaceTime.
+- [ACTION:shortcut:NOM] ou [ACTION:shortcut:NOM|TEXTE] — lancer un raccourci iOS créé par Jibril. Ex: "Je le lance. [ACTION:shortcut:Minuteur 10 min]"
+
+Règles : n'utilise un marqueur QUE si Jibril demande explicitement une action. Pour une simple question, réponds normalement sans marqueur. Un seul marqueur par réponse. Si une info manque (ex: un numéro), demande-la au lieu d'inventer.`;
+
 const store = {
   get key(){ return localStorage.getItem('jarvis_apikey') || ''; },
   set key(v){ localStorage.setItem('jarvis_apikey', v); },
@@ -493,7 +509,7 @@ async function askClaude(userText){
         'x-goog-api-key':key
       },
       body:JSON.stringify({
-        system_instruction:{ parts:[{ text: store.persona }] },
+        system_instruction:{ parts:[{ text: store.persona + ACTION_INSTRUCTIONS }] },
         contents,
         generationConfig:{ maxOutputTokens:1024, temperature:0.9 }
       })
@@ -518,8 +534,11 @@ async function askClaude(userText){
       reply = (data.candidates[0].content.parts||[]).map(p=>p.text||'').join(' ').trim();
     }catch(e){ reply=''; }
     if(!reply) reply = "Je n'ai rien à dire là-dessus.";
-    addMsg('assistant', reply);
-    speak(reply);
+
+    // Détecte et exécute une éventuelle action iOS, nettoie le texte.
+    const result = handleActions(reply);
+    addMsg('assistant', result.text);
+    speak(result.text);
   }catch(e){
     hideTyping();
     const msg='Connexion impossible. Vérifie ton réseau.';
@@ -530,8 +549,69 @@ async function askClaude(userText){
 }
 
 /* ============================================================
-   RECONNAISSANCE VOCALE (Web Speech API)
+   ACTIONS iOS — "JARVIS contrôle le téléphone"
+   Gemini répond avec un marqueur [ACTION:type:valeur] que l'app
+   transforme en lien spécial iOS. Chaque lien ouvre l'app concernée.
    ============================================================ */
+
+// Construit le lien iOS correspondant à une action.
+function buildActionURL(type, value){
+  value = (value||'').trim();
+  switch(type){
+    case 'call':      // appeler un numéro
+      return 'tel:'+encodeURIComponent(value);
+    case 'sms':       // SMS pré-rempli — format "numéro|message" ou juste "message"
+      {
+        const parts = value.split('|');
+        if(parts.length===2) return 'sms:'+encodeURIComponent(parts[0].trim())+'&body='+encodeURIComponent(parts[1].trim());
+        return 'sms:&body='+encodeURIComponent(value);
+      }
+    case 'maps':      // ouvrir Plans sur un lieu
+      return 'maps://?q='+encodeURIComponent(value);
+    case 'web':       // ouvrir une page web
+      return value.startsWith('http') ? value : 'https://'+value;
+    case 'facetime':
+      return 'facetime:'+encodeURIComponent(value);
+    case 'mail':      // mail pré-rempli — "destinataire|sujet|corps" (champs optionnels)
+      {
+        const p = value.split('|');
+        let u = 'mailto:'+encodeURIComponent(p[0]||'');
+        const q=[];
+        if(p[1]) q.push('subject='+encodeURIComponent(p[1]));
+        if(p[2]) q.push('body='+encodeURIComponent(p[2]));
+        if(q.length) u += '?'+q.join('&');
+        return u;
+      }
+    case 'shortcut':  // lancer un Raccourci iOS par son nom — "Nom" ou "Nom|texte d'entrée"
+      {
+        const p = value.split('|');
+        let u = 'shortcuts://run-shortcut?name='+encodeURIComponent(p[0].trim());
+        if(p[1]) u += '&input=text&text='+encodeURIComponent(p[1].trim());
+        return u;
+      }
+    default: return null;
+  }
+}
+
+// Détecte un marqueur d'action dans la réponse, l'exécute, et renvoie
+// le texte nettoyé (sans le marqueur) à lire à voix haute.
+function handleActions(reply){
+  const re = /\[ACTION:([a-z]+):([^\]]*)\]/i;
+  const m = reply.match(re);
+  if(!m) return { text: reply, acted:false };
+
+  const type = m[1].toLowerCase();
+  const value = m[2];
+  const url = buildActionURL(type, value);
+  const cleaned = reply.replace(re,'').trim() || 'C\'est fait.';
+
+  if(url){
+    // petit délai pour laisser la voix démarrer avant le changement d'app
+    setTimeout(()=>{ try{ window.location.href = url; }catch(e){ console.error('action url',e); } }, 700);
+    return { text: cleaned, acted:true };
+  }
+  return { text: cleaned, acted:false };
+}
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 let recog = null, listening = false;
 const coreEl = document.getElementById('core');
