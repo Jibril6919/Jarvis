@@ -447,7 +447,7 @@ if(SR){
   recog.interimResults=true;
   recog.continuous=false;
 
-  recog.onstart=()=>{ listening=true; setCore('listening','je t\\'écoute…'); heardEl.textContent=''; };
+  recog.onstart=()=>{ listening=true; setCore('listening',"je t'écoute…"); heardEl.textContent=''; };
   recog.onresult=(e)=>{
     let txt='';
     for(let i=0;i<e.results.length;i++) txt+=e.results[i][0].transcript;
