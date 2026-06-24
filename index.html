@@ -198,7 +198,10 @@
     <h1>J.A.R.V.I.S</h1>
     <span class="ver">v1.0</span>
   </div>
-  <div class="status-dot"><span class="dot"></span><span id="sys-status">en ligne</span></div>
+  <div style="display:flex;align-items:center;gap:14px;">
+    <button id="new-conv-btn" title="Nouvelle conversation" style="background:none;border:1px solid var(--edge);color:var(--cyan);border-radius:8px;width:30px;height:30px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:18px;line-height:1;padding:0;">+</button>
+    <div class="status-dot"><span class="dot"></span><span id="sys-status">en ligne</span></div>
+  </div>
 </header>
 
 <!-- ============ VUE CONVERSATION ============ -->
@@ -396,7 +399,7 @@ function restoreHistory(){
 /* ============================================================
    RECHERCHE WEB (Tavily) — skill activable
    ============================================================ */
-const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_MODEL = 'gemini-2.5-flash-lite';
 
 // Interroge Tavily et renvoie un texte synthétique (answer + sources).
 async function tavilySearch(query){
@@ -430,39 +433,78 @@ async function tavilySearch(query){
   }catch(e){ console.error('Tavily:',e); return null; }
 }
 
-// Demande à Gemini de décider si la question nécessite une recherche web.
-// Renvoie soit null (pas besoin), soit une requête de recherche optimisée.
-async function needsSearch(userText){
+/* ============================================================
+   APPEL API GEMINI (Google AI Studio — palier gratuit)
+   ============================================================ */
+function searchEnabled(){ return !!store.skills.search && !!store.tavilyKey; }
+
+const HISTORY_LIMIT = 15;          // messages max gardés dans une conversation
+const SESSION_TIMEOUT_MS = 5*60*1000; // 5 min d'inactivité = nouvelle conversation
+
+// Construit la liste des messages à envoyer, selon la règle de session.
+// Si trop de temps s'est écoulé depuis le dernier échange, on repart à zéro
+// (0 historique envoyé) — c'est la "détection de nouvelle conversation".
+function buildContents(userText){
+  const last = parseInt(localStorage.getItem('jarvis_lastmsg')||'0',10);
+  const now = Date.now();
+  const freshSession = last>0 && (now-last) > SESSION_TIMEOUT_MS;
+
+  let hist = store.history.slice(); // inclut déjà le message courant (ajouté avant l'appel)
+  if(freshSession){
+    // nouvelle conversation : on n'envoie que le message courant
+    hist = hist.slice(-1);
+    addMsg('system','— Nouvelle conversation —', false);
+  }else{
+    // même conversation : on plafonne à HISTORY_LIMIT messages récents
+    hist = hist.slice(-HISTORY_LIMIT);
+  }
+  return hist.map(m=>({
+    role: m.role==='assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }]
+  }));
+}
+
+// Un appel Gemini générique. Renvoie {ok, reply, status}.
+async function callGemini(contents){
   const key = store.key;
   const today = new Date().toISOString().slice(0,10);
+  let systemText = store.persona + ACTION_INSTRUCTIONS;
+  if(searchEnabled()){
+    systemText += `\n\nRECHERCHE WEB : on est le ${today}. Si répondre nécessite des infos récentes ou temps réel que tu n'as pas (actualité, météo, prix, sport, événements récents), n'invente pas : place en TOUT DÉBUT de réponse le marqueur [SEARCH:requête courte 3-8 mots] et rien d'autre après. Une recherche sera faite et tu répondras ensuite. Si tu peux répondre sans recherche, fais-le normalement sans marqueur.`;
+  }
   try{
     const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent',{
       method:'POST',
       headers:{'Content-Type':'application/json','x-goog-api-key':key},
       body:JSON.stringify({
-        system_instruction:{ parts:[{ text:
-          `Tu es un routeur. On est le ${today}. L'utilisateur pose une question. `+
-          `Si répondre correctement nécessite des informations récentes ou en temps réel `+
-          `(actualité, météo, prix, résultats sportifs, événements, "aujourd'hui", "dernier", etc.), `+
-          `réponds UNIQUEMENT par une requête de recherche web courte et optimisée (3-8 mots), rien d'autre. `+
-          `Si la question peut être répondue sans recherche (connaissance générale, calcul, conversation), réponds EXACTEMENT le mot: NON.` }] },
-        contents:[{ role:'user', parts:[{ text:userText }] }],
-        generationConfig:{ maxOutputTokens:30, temperature:0 }
+        system_instruction:{ parts:[{ text: systemText }] },
+        contents,
+        generationConfig:{ maxOutputTokens:1024, temperature:0.9 }
       })
     });
-    if(!res.ok) return null;
+    if(!res.ok){
+      const errTxt = await res.text();
+      console.error(errTxt);
+      return { ok:false, status:res.status };
+    }
     const data = await res.json();
-    let out='';
-    try{ out = data.candidates[0].content.parts.map(p=>p.text||'').join(' ').trim(); }catch(e){ return null; }
-    if(!out || out.toUpperCase().startsWith('NON')) return null;
-    return out.replace(/^["']|["']$/g,'').trim();
-  }catch(e){ return null; }
+    let reply='';
+    try{ reply = (data.candidates[0].content.parts||[]).map(p=>p.text||'').join(' ').trim(); }catch(e){ reply=''; }
+    return { ok:true, reply };
+  }catch(e){
+    console.error(e);
+    return { ok:false, status:0 };
+  }
 }
 
-/* ============================================================
-   APPEL API GEMINI (Google AI Studio — palier gratuit)
-   ============================================================ */
-function searchEnabled(){ return !!store.skills.search && !!store.tavilyKey; }
+// Traduit un code d'erreur HTTP en message clair (et indique quel quota).
+function quotaMessage(status){
+  if(status===400) return 'Clé API invalide ou mal copiée. Vérifie-la dans Réglages.';
+  if(status===403) return 'Clé refusée. Vérifie qu\'elle est bien active.';
+  if(status===429) return 'Quota atteint. Si ça remarche dans 1 minute, c\'était la limite par minute (tu vas trop vite). Si c\'est bloqué longtemps, c\'est la limite du jour — ça repart demain.';
+  if(status===0)   return 'Connexion impossible. Vérifie ton réseau.';
+  return 'Erreur '+status+'. Réessaie.';
+}
 
 async function askClaude(userText){
   const key = store.key;
@@ -475,76 +517,53 @@ async function askClaude(userText){
   showTyping();
   setCore('idle','traitement…');
 
-  // --- Étape recherche web (si le skill est actif) ---
-  let searchContext = null;
-  if(searchEnabled()){
-    const q = await needsSearch(userText);
-    if(q){
-      setCore('idle','recherche web…');
-      searchContext = await tavilySearch(q);
-    }
-  }
+  // Construit l'historique (avec règle de nouvelle conversation par inactivité)
+  let contents = buildContents(userText);
 
-  // Gemini attend un format différent : roles "user"/"model", et le system
-  // prompt passe dans un champ "system_instruction" séparé.
-  const contents = store.history.map(m=>({
-    role: m.role==='assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }]
-  }));
-
-  // Si on a des résultats de recherche, on les injecte dans le dernier message user.
-  if(searchContext && contents.length>0){
-    const last = contents[contents.length-1];
-    last.parts[0].text = userText +
-      '\n\n[Informations web récentes pour répondre — utilise-les et cite si pertinent, ignore ce qui est hors sujet]\n' +
-      searchContext;
-  }
-
-  try{
-    const url = 'https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent';
-    const res = await fetch(url,{
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'x-goog-api-key':key
-      },
-      body:JSON.stringify({
-        system_instruction:{ parts:[{ text: store.persona + ACTION_INSTRUCTIONS }] },
-        contents,
-        generationConfig:{ maxOutputTokens:1024, temperature:0.9 }
-      })
-    });
+  // 1er appel Gemini
+  let r = await callGemini(contents);
+  if(!r.ok){
     hideTyping();
-    if(!res.ok){
-      const errTxt = await res.text();
-      let msg = 'Erreur '+res.status;
-      if(res.status===400) msg='Clé API invalide ou mal copiée. Vérifie-la dans Réglages.';
-      else if(res.status===403) msg='Clé refusée. Vérifie qu\'elle est bien active.';
-      else if(res.status===429) msg='Quota gratuit atteint pour le moment. Réessaie dans une minute.';
-      addMsg('assistant', msg);
-      speak(msg);
-      console.error(errTxt);
-      setCore('idle','appuie pour parler');
-      return;
-    }
-    const data = await res.json();
-    // Gemini renvoie : candidates[0].content.parts[].text
-    let reply = '';
-    try{
-      reply = (data.candidates[0].content.parts||[]).map(p=>p.text||'').join(' ').trim();
-    }catch(e){ reply=''; }
-    if(!reply) reply = "Je n'ai rien à dire là-dessus.";
-
-    // Détecte et exécute une éventuelle action iOS, nettoie le texte.
-    const result = handleActions(reply);
-    addMsg('assistant', result.text);
-    speak(result.text);
-  }catch(e){
-    hideTyping();
-    const msg='Connexion impossible. Vérifie ton réseau.';
+    const msg = quotaMessage(r.status);
     addMsg('assistant', msg); speak(msg);
-    console.error(e);
+    setCore('idle','appuie pour parler');
+    localStorage.setItem('jarvis_lastmsg', String(Date.now()));
+    return;
   }
+
+  let reply = r.reply || '';
+
+  // Gemini a-t-il demandé une recherche ? (marqueur [SEARCH:...] en début)
+  const sm = reply.match(/\[SEARCH:([^\]]+)\]/i);
+  if(sm && searchEnabled()){
+    const query = sm[1].trim();
+    setCore('idle','recherche web…');
+    const ctx = await tavilySearch(query);
+    // 2e appel : on réinjecte le contexte web dans le dernier message user
+    if(ctx && contents.length>0){
+      const lastC = contents[contents.length-1];
+      lastC.parts[0].text = userText +
+        '\n\n[Informations web récentes — utilise-les, ignore le hors sujet]\n' + ctx;
+    }
+    const r2 = await callGemini(contents);
+    if(r2.ok && r2.reply){
+      reply = r2.reply.replace(/\[SEARCH:[^\]]+\]/ig,'').trim();
+    }else{
+      // si le 2e appel échoue, on enlève juste le marqueur du 1er
+      reply = reply.replace(/\[SEARCH:[^\]]+\]/ig,'').trim() || "Je n'ai pas pu chercher, réessaie.";
+    }
+  }
+
+  hideTyping();
+  if(!reply) reply = "Je n'ai rien à dire là-dessus.";
+
+  // Détecte et exécute une éventuelle action iOS, nettoie le texte.
+  const result = handleActions(reply);
+  addMsg('assistant', result.text);
+  speak(result.text);
+
+  // mémorise l'heure du dernier échange (pour la détection de session)
+  localStorage.setItem('jarvis_lastmsg', String(Date.now()));
   setCore('idle','appuie pour parler');
 }
 
@@ -790,6 +809,16 @@ function maybeAutoListen(){
     setTimeout(()=>{ try{ recog.start(); }catch(e){} }, 900);
   }, 600);
 }
+
+/* ============================================================
+   BOUTON NOUVELLE CONVERSATION (reset manuel)
+   ============================================================ */
+document.getElementById('new-conv-btn').addEventListener('click',()=>{
+  store.history = [];
+  localStorage.removeItem('jarvis_lastmsg');
+  logEl.innerHTML='';
+  addMsg('system','Nouvelle conversation. JARVIS repart de zéro.', false);
+});
 
 /* ============================================================
    INIT
