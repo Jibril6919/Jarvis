@@ -236,6 +236,10 @@
         <label>Clé API Google Gemini</label>
         <input type="password" id="apikey" placeholder="AIza..." autocomplete="off">
       </div>
+      <div class="field">
+        <label>Clé API Tavily (recherche web)</label>
+        <input type="password" id="tavilykey" placeholder="tvly-..." autocomplete="off">
+      </div>
       <div class="warn-box" style="margin-top:12px">
         ⚠️ Version de test. Ne publie pas cette app en ligne avec ta clé : sur une page publique elle serait visible. Pour la mise en ligne, on ajoutera un proxy.
       </div>
@@ -292,6 +296,8 @@ const DEFAULT_PERSONA =
 const store = {
   get key(){ return localStorage.getItem('jarvis_apikey') || ''; },
   set key(v){ localStorage.setItem('jarvis_apikey', v); },
+  get tavilyKey(){ return localStorage.getItem('jarvis_tavily') || ''; },
+  set tavilyKey(v){ localStorage.setItem('jarvis_tavily', v); },
   get persona(){ return localStorage.getItem('jarvis_persona') || DEFAULT_PERSONA; },
   set persona(v){ localStorage.setItem('jarvis_persona', v); },
   get voice(){ return localStorage.getItem('jarvis_voice') || ''; },
@@ -308,7 +314,7 @@ const store = {
    ============================================================ */
 const SKILL_REGISTRY = [
   { id:'memory',  ico:'🧠', name:'Mémoire de conversation', desc:"Se souvient du fil de la discussion en cours.", ready:true },
-  { id:'search',  ico:'🔎', name:'Recherche web',            desc:"Chercher des infos à jour sur internet.", ready:false },
+  { id:'search',  ico:'🔎', name:'Recherche web',            desc:"Chercher des infos à jour sur internet (via Tavily).", ready:true },
   { id:'weather', ico:'🌤️', name:'Météo',                    desc:"Donner la météo de ta position ou d'une ville.", ready:false },
   { id:'shortcuts',ico:'⚡', name:'Raccourcis iOS',           desc:"Déclencher tes Raccourcis Apple (minuteur, musique, domotique...).", ready:false },
   { id:'home',    ico:'🏠', name:'Maison connectée',          desc:"Piloter lumières et objets connectés.", ready:false },
@@ -372,9 +378,75 @@ function restoreHistory(){
 }
 
 /* ============================================================
-   APPEL API GEMINI (Google AI Studio — palier gratuit)
+   RECHERCHE WEB (Tavily) — skill activable
    ============================================================ */
 const GEMINI_MODEL = 'gemini-2.5-flash';
+
+// Interroge Tavily et renvoie un texte synthétique (answer + sources).
+async function tavilySearch(query){
+  const tkey = store.tavilyKey;
+  if(!tkey) return null;
+  try{
+    const res = await fetch('https://api.tavily.com/search',{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'Authorization':'Bearer '+tkey
+      },
+      body:JSON.stringify({
+        query: query,
+        include_answer: 'advanced',
+        max_results: 5,
+        search_depth: 'basic'
+      })
+    });
+    if(!res.ok) return null;
+    const data = await res.json();
+    let ctx = '';
+    if(data.answer) ctx += 'Résumé : '+data.answer+'\n\n';
+    if(Array.isArray(data.results)){
+      ctx += 'Sources :\n';
+      data.results.slice(0,5).forEach((r,i)=>{
+        ctx += (i+1)+'. '+(r.title||'')+' — '+(r.content||'').slice(0,300)+'\n';
+      });
+    }
+    return ctx.trim() || null;
+  }catch(e){ console.error('Tavily:',e); return null; }
+}
+
+// Demande à Gemini de décider si la question nécessite une recherche web.
+// Renvoie soit null (pas besoin), soit une requête de recherche optimisée.
+async function needsSearch(userText){
+  const key = store.key;
+  const today = new Date().toISOString().slice(0,10);
+  try{
+    const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent',{
+      method:'POST',
+      headers:{'Content-Type':'application/json','x-goog-api-key':key},
+      body:JSON.stringify({
+        system_instruction:{ parts:[{ text:
+          `Tu es un routeur. On est le ${today}. L'utilisateur pose une question. `+
+          `Si répondre correctement nécessite des informations récentes ou en temps réel `+
+          `(actualité, météo, prix, résultats sportifs, événements, "aujourd'hui", "dernier", etc.), `+
+          `réponds UNIQUEMENT par une requête de recherche web courte et optimisée (3-8 mots), rien d'autre. `+
+          `Si la question peut être répondue sans recherche (connaissance générale, calcul, conversation), réponds EXACTEMENT le mot: NON.` }] },
+        contents:[{ role:'user', parts:[{ text:userText }] }],
+        generationConfig:{ maxOutputTokens:30, temperature:0 }
+      })
+    });
+    if(!res.ok) return null;
+    const data = await res.json();
+    let out='';
+    try{ out = data.candidates[0].content.parts.map(p=>p.text||'').join(' ').trim(); }catch(e){ return null; }
+    if(!out || out.toUpperCase().startsWith('NON')) return null;
+    return out.replace(/^["']|["']$/g,'').trim();
+  }catch(e){ return null; }
+}
+
+/* ============================================================
+   APPEL API GEMINI (Google AI Studio — palier gratuit)
+   ============================================================ */
+function searchEnabled(){ return !!store.skills.search && !!store.tavilyKey; }
 
 async function askClaude(userText){
   const key = store.key;
@@ -384,6 +456,19 @@ async function askClaude(userText){
     return;
   }
 
+  showTyping();
+  setCore('idle','traitement…');
+
+  // --- Étape recherche web (si le skill est actif) ---
+  let searchContext = null;
+  if(searchEnabled()){
+    const q = await needsSearch(userText);
+    if(q){
+      setCore('idle','recherche web…');
+      searchContext = await tavilySearch(q);
+    }
+  }
+
   // Gemini attend un format différent : roles "user"/"model", et le system
   // prompt passe dans un champ "system_instruction" séparé.
   const contents = store.history.map(m=>({
@@ -391,8 +476,14 @@ async function askClaude(userText){
     parts: [{ text: m.content }]
   }));
 
-  showTyping();
-  setCore('idle','traitement…');
+  // Si on a des résultats de recherche, on les injecte dans le dernier message user.
+  if(searchContext && contents.length>0){
+    const last = contents[contents.length-1];
+    last.parts[0].text = userText +
+      '\n\n[Informations web récentes pour répondre — utilise-les et cite si pertinent, ignore ce qui est hors sujet]\n' +
+      searchContext;
+  }
+
   try{
     const url = 'https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent';
     const res = await fetch(url,{
@@ -560,6 +651,9 @@ function renderSkills(){
   });
   list.querySelectorAll('input[data-skill]').forEach(inp=>{
     inp.addEventListener('change',()=>{
+      if(inp.dataset.skill==='search' && inp.checked && !store.tavilyKey){
+        addMsg('system','Active la recherche : ajoute ta clé Tavily dans Réglages pour qu\'elle fonctionne.', false);
+      }
       const sk=store.skills; sk[inp.dataset.skill]=inp.checked; store.skills=sk;
     });
   });
@@ -570,16 +664,19 @@ function renderSkills(){
    ============================================================ */
 function loadSettings(){
   document.getElementById('apikey').value = store.key;
+  document.getElementById('tavilykey').value = store.tavilyKey;
   document.getElementById('persona').value = store.persona;
 }
 document.getElementById('save-btn').addEventListener('click',()=>{
   store.key = document.getElementById('apikey').value.trim();
+  store.tavilyKey = document.getElementById('tavilykey').value.trim();
   store.persona = document.getElementById('persona').value.trim() || DEFAULT_PERSONA;
   store.voice = document.getElementById('voice-select').value;
   const f=document.getElementById('save-flash');
   f.textContent='✓ enregistré';
   setTimeout(()=>f.textContent='',1800);
   document.getElementById('sys-status').textContent = store.key?'prêt':'clé manquante';
+  renderSkills(); // rafraîchit l'état du toggle recherche selon la clé Tavily
 });
 document.getElementById('clear-btn').addEventListener('click',()=>{
   if(confirm('Effacer toute la conversation ?')){
