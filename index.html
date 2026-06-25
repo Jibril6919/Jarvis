@@ -290,10 +290,20 @@ Papa : 0601020304"></textarea>
 
     <div class="set-block">
       <h2>Voix</h2>
+      <p class="hint">Pour une meilleure voix : Réglages iPhone → Accessibilité → Contenu énoncé → Voix → Français → télécharge une voix « Améliorée » (Thomas, Daniel...). Elle apparaîtra ci-dessous.</p>
       <div class="field">
         <label>Voix de synthèse</label>
         <select id="voice-select"></select>
       </div>
+      <div class="field" style="margin-top:13px;">
+        <label>Vitesse — <span id="rate-val">0.96</span></label>
+        <input type="range" id="voice-rate" min="0.6" max="1.4" step="0.02" style="width:100%;accent-color:var(--cyan);">
+      </div>
+      <div class="field" style="margin-top:13px;">
+        <label>Grave ↔ Aigu — <span id="pitch-val">0.85</span></label>
+        <input type="range" id="voice-pitch" min="0.5" max="1.3" step="0.02" style="width:100%;accent-color:var(--cyan);">
+      </div>
+      <button class="btn ghost" id="test-voice-btn" style="margin-top:14px;">▶ Tester la voix</button>
     </div>
 
     <button class="btn" id="save-btn">Enregistrer</button>
@@ -363,6 +373,10 @@ const store = {
   set persona(v){ localStorage.setItem('jarvis_persona', v); },
   get voice(){ return localStorage.getItem('jarvis_voice') || ''; },
   set voice(v){ localStorage.setItem('jarvis_voice', v); },
+  get voiceRate(){ return parseFloat(localStorage.getItem('jarvis_voicerate')||'0.94'); },
+  set voiceRate(v){ localStorage.setItem('jarvis_voicerate', String(v)); },
+  get voicePitch(){ return parseFloat(localStorage.getItem('jarvis_voicepitch')||'0.82'); },
+  set voicePitch(v){ localStorage.setItem('jarvis_voicepitch', String(v)); },
   get skills(){ try{return JSON.parse(localStorage.getItem('jarvis_skills'))||{}}catch{return{}} },
   set skills(v){ localStorage.setItem('jarvis_skills', JSON.stringify(v)); },
   get history(){ try{return JSON.parse(localStorage.getItem('jarvis_hist'))||[]}catch{return[]} },
@@ -840,20 +854,59 @@ function loadVoices(){
     o.value=v.name; o.textContent=v.name+' ('+v.lang+')';
     sel.appendChild(o);
   });
+  // Si aucune voix encore choisie, on privilégie Thomas (voix masculine FR posée).
+  if(!store.voice){
+    const thomas = voices.find(v=>/thomas/i.test(v.name))
+                || voices.find(v=>/daniel/i.test(v.name))
+                || voices.find(v=>v.lang.startsWith('fr'));
+    if(thomas){ store.voice = thomas.name; }
+  }
   if(store.voice) sel.value=store.voice;
 }
 if(synth){ loadVoices(); synth.onvoiceschanged=loadVoices; }
 
+// Nettoie le texte pour une lecture vocale fluide (enlève symboles parasites,
+// développe quelques abréviations, normalise les espaces).
+function cleanForSpeech(text){
+  let t = text;
+  t = t.replace(/[*_#`>•▪–—]/g,' ');        // markdown et tirets parasites
+  t = t.replace(/\betc\.?/gi,'et cetera');
+  t = t.replace(/\bM\./g,'Monsieur');
+  t = t.replace(/\bMme\b/g,'Madame');
+  t = t.replace(/\bex\.?\s/gi,'par exemple ');
+  t = t.replace(/\s+/g,' ').trim();          // espaces multiples
+  return t;
+}
+
+// Découpe en phrases pour un débit régulier (iOS lit mieux des segments courts).
+function splitSentences(text){
+  const parts = text.match(/[^.!?…]+[.!?…]+|\S+$/g) || [text];
+  return parts.map(s=>s.trim()).filter(Boolean);
+}
+
 function speak(text){
   if(!synth) return;
   synth.cancel();
-  const u=new SpeechSynthesisUtterance(text);
+  const cleaned = cleanForSpeech(text);
   const chosen = voices.find(v=>v.name===store.voice) || voices.find(v=>v.lang.startsWith('fr')) || voices[0];
-  if(chosen){ u.voice=chosen; u.lang=chosen.lang; }
-  u.rate=1.03; u.pitch=1;
-  u.onstart=()=>{ speaking=true; setCore('speaking','…'); };
-  u.onend=()=>{ speaking=false; setCore('idle','appuie pour parler'); };
-  synth.speak(u);
+  const sentences = splitSentences(cleaned);
+  if(sentences.length===0){ speaking=false; return; }
+
+  speaking=true; setCore('speaking','…');
+  let idx=0;
+  const speakNext=()=>{
+    if(idx>=sentences.length){
+      speaking=false; setCore('idle','appuie pour parler');
+      return;
+    }
+    const u=new SpeechSynthesisUtterance(sentences[idx]);
+    if(chosen){ u.voice=chosen; u.lang=chosen.lang; }
+    u.rate=store.voiceRate; u.pitch=store.voicePitch;
+    u.onend=()=>{ idx++; speakNext(); };
+    u.onerror=()=>{ idx++; speakNext(); };
+    synth.speak(u);
+  };
+  speakNext();
 }
 function stopSpeak(){ if(synth){synth.cancel(); speaking=false; setCore('idle','appuie pour parler');} }
 
@@ -928,8 +981,29 @@ function loadSettings(){
   document.getElementById('memofiche').value = store.memoFiche;
   document.getElementById('memomode').value = store.memoMode;
   document.getElementById('persona').value = store.persona;
+  // curseurs de voix
+  const rate = document.getElementById('voice-rate');
+  const pitch = document.getElementById('voice-pitch');
+  rate.value = store.voiceRate;
+  pitch.value = store.voicePitch;
+  document.getElementById('rate-val').textContent = store.voiceRate.toFixed(2);
+  document.getElementById('pitch-val').textContent = store.voicePitch.toFixed(2);
   renderMemoryList();
 }
+// affichage live des valeurs pendant qu'on bouge les curseurs
+document.getElementById('voice-rate').addEventListener('input',(e)=>{
+  document.getElementById('rate-val').textContent = parseFloat(e.target.value).toFixed(2);
+});
+document.getElementById('voice-pitch').addEventListener('input',(e)=>{
+  document.getElementById('pitch-val').textContent = parseFloat(e.target.value).toFixed(2);
+});
+// bouton test : applique les valeurs courantes et fait parler un exemple
+document.getElementById('test-voice-btn').addEventListener('click',()=>{
+  store.voiceRate = parseFloat(document.getElementById('voice-rate').value);
+  store.voicePitch = parseFloat(document.getElementById('voice-pitch').value);
+  store.voice = document.getElementById('voice-select').value;
+  speak('Bonjour Jibril. Voici ma voix avec ces réglages.');
+});
 document.getElementById('save-btn').addEventListener('click',()=>{
   store.key = document.getElementById('apikey').value.trim();
   store.tavilyKey = document.getElementById('tavilykey').value.trim();
@@ -938,6 +1012,8 @@ document.getElementById('save-btn').addEventListener('click',()=>{
   store.memoMode = document.getElementById('memomode').value;
   store.persona = document.getElementById('persona').value.trim() || DEFAULT_PERSONA;
   store.voice = document.getElementById('voice-select').value;
+  store.voiceRate = parseFloat(document.getElementById('voice-rate').value);
+  store.voicePitch = parseFloat(document.getElementById('voice-pitch').value);
   const f=document.getElementById('save-flash');
   f.textContent='✓ enregistré';
   setTimeout(()=>f.textContent='',1800);
