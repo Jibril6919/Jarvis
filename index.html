@@ -234,10 +234,21 @@
   <div class="set-wrap">
     <div class="set-block">
       <h2>Connexion</h2>
-      <p class="hint">Ta clé API Google Gemini est stockée uniquement sur cet appareil. Récupère-la gratuitement sur aistudio.google.com (aucune carte bancaire requise).</p>
       <div class="field">
+        <label>Moteur IA</label>
+        <select id="engine-select">
+          <option value="gemini">Gemini — qualité (quota plus serré)</option>
+          <option value="groq">Groq — rapide, gros quota (qualité un cran en dessous)</option>
+        </select>
+      </div>
+      <p class="hint" style="margin-top:10px;">Clés stockées uniquement sur cet appareil. Gemini : aistudio.google.com. Groq : console.groq.com. Tavily : tavily.com. Aucune carte bancaire requise.</p>
+      <div class="field" style="margin-top:10px;">
         <label>Clé API Google Gemini</label>
         <input type="password" id="apikey" placeholder="AIza..." autocomplete="off">
+      </div>
+      <div class="field">
+        <label>Clé API Groq</label>
+        <input type="password" id="groqkey" placeholder="gsk_..." autocomplete="off">
       </div>
       <div class="field">
         <label>Clé API Tavily (recherche web)</label>
@@ -361,6 +372,10 @@ const store = {
   set key(v){ localStorage.setItem('jarvis_apikey', v); },
   get tavilyKey(){ return localStorage.getItem('jarvis_tavily') || ''; },
   set tavilyKey(v){ localStorage.setItem('jarvis_tavily', v); },
+  get groqKey(){ return localStorage.getItem('jarvis_groq') || ''; },
+  set groqKey(v){ localStorage.setItem('jarvis_groq', v); },
+  get engine(){ return localStorage.getItem('jarvis_engine') || 'gemini'; }, // 'gemini' | 'groq'
+  set engine(v){ localStorage.setItem('jarvis_engine', v); },
   get contacts(){ return localStorage.getItem('jarvis_contacts') || ''; },
   set contacts(v){ localStorage.setItem('jarvis_contacts', v); },
   get memoFiche(){ return localStorage.getItem('jarvis_memofiche') || ''; },
@@ -547,9 +562,8 @@ function buildMemoryBlock(userText){
   return block.trim();
 }
 
-// Un appel Gemini générique. Renvoie {ok, reply, status}.
-async function callGemini(contents, userText){
-  const key = store.key;
+// Construit le texte système commun aux deux moteurs.
+function buildSystemText(userText){
   const today = new Date().toISOString().slice(0,10);
   let systemText = store.persona + ACTION_INSTRUCTIONS;
   if(store.contacts.trim()){
@@ -562,6 +576,19 @@ async function callGemini(contents, userText){
   if(searchEnabled()){
     systemText += `\n\nRECHERCHE WEB : on est le ${today}. Si répondre nécessite des infos récentes ou temps réel que tu n'as pas (actualité, météo, prix, sport, événements récents), n'invente pas : place en TOUT DÉBUT de réponse le marqueur [SEARCH:requête courte 3-8 mots] et rien d'autre après. Une recherche sera faite et tu répondras ensuite. Si tu peux répondre sans recherche, fais-le normalement sans marqueur.`;
   }
+  return systemText;
+}
+
+// Appel au moteur sélectionné (Gemini ou Groq). Renvoie {ok, reply, status}.
+// `contents` est au format Gemini (role 'user'/'model', parts[].text) ;
+// on le convertit au format Groq quand nécessaire.
+async function callGemini(contents, userText){
+  const systemText = buildSystemText(userText);
+  if(store.engine==='groq'){
+    return await callGroq(contents, systemText);
+  }
+  // --- Moteur GEMINI ---
+  const key = store.key;
   try{
     const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models/'+GEMINI_MODEL+':generateContent',{
       method:'POST',
@@ -587,6 +614,72 @@ async function callGemini(contents, userText){
   }
 }
 
+// Modèle Groq utilisé (le plus permissif en quota gratuit + rapide).
+const GROQ_MODEL = 'llama-3.1-8b-instant';
+
+// Appel à l'API Groq (format OpenAI). Convertit l'historique format Gemini
+// vers le format Groq, avec le system prompt en premier message.
+async function callGroq(contents, systemText){
+  const key = store.groqKey;
+  if(!key){
+    return { ok:false, status:401, noKey:true };
+  }
+  // Conversion : parts[].text -> content ; role 'model' -> 'assistant'
+  const messages = [{ role:'system', content: systemText }];
+  contents.forEach(c=>{
+    const role = c.role==='model' ? 'assistant' : 'user';
+    const text = (c.parts||[]).map(p=>p.text||'').join(' ');
+    messages.push({ role, content: text });
+  });
+  try{
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions',{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'Authorization':'Bearer '+key
+      },
+      body:JSON.stringify({
+        model: GROQ_MODEL,
+        messages,
+        max_tokens: 1024,
+        temperature: 0.9
+      })
+    });
+    if(!res.ok){
+      const errTxt = await res.text();
+      console.error('Groq:',errTxt);
+      return { ok:false, status:res.status };
+    }
+    const data = await res.json();
+    let reply='';
+    try{ reply = (data.choices[0].message.content||'').trim(); }catch(e){ reply=''; }
+    return { ok:true, reply };
+  }catch(e){
+    console.error('Groq:',e);
+    return { ok:false, status:0 };
+  }
+}
+
+// Enveloppe callGemini avec un retry automatique sur la limite par minute (429).
+// Attend de plus en plus longtemps entre les tentatives, puis abandonne.
+async function callGeminiWithRetry(contents, userText){
+  const delays = [3000, 6000, 10000]; // 3s, 6s, 10s
+  let last = { ok:false, status:0 };
+  for(let attempt=0; attempt<=delays.length; attempt++){
+    const r = await callGemini(contents, userText);
+    if(r.ok) return r;
+    last = r;
+    // on ne réessaie que sur 429 (limite de débit). Les autres erreurs sont définitives.
+    if(r.status!==429) return r;
+    if(attempt < delays.length){
+      setCore('idle','je patiente…');
+      addMsg('system','Limite momentanée atteinte, je patiente '+(delays[attempt]/1000)+'s…', false);
+      await sleep(delays[attempt]);
+    }
+  }
+  return last;
+}
+
 // Traduit un code d'erreur HTTP en message clair (et indique quel quota).
 function quotaMessage(status){
   if(status===400) return 'Clé API invalide ou mal copiée. Vérifie-la dans Réglages.';
@@ -599,10 +692,12 @@ function quotaMessage(status){
 let lastReply = ''; // mémorise la dernière réponse pour la commande "répète" (0 quota)
 
 async function askClaude(userText){
-  const key = store.key;
-  if(!key){
-    addMsg('assistant',"Aucune clé API configurée. Va dans Réglages pour en ajouter une.");
-    speak("Aucune clé configurée. Va dans les réglages.");
+  // Vérifie la clé du moteur sélectionné
+  const activeKey = store.engine==='groq' ? store.groqKey : store.key;
+  if(!activeKey){
+    const which = store.engine==='groq' ? 'Groq' : 'Gemini';
+    addMsg('assistant',"Aucune clé "+which+" configurée. Va dans Réglages pour en ajouter une, ou change de moteur.");
+    speak("Aucune clé "+which+" configurée. Va dans les réglages.");
     return;
   }
 
@@ -626,8 +721,8 @@ async function askClaude(userText){
   // Construit l'historique (avec règle de nouvelle conversation par inactivité)
   let contents = buildContents(userText);
 
-  // 1er appel Gemini
-  let r = await callGemini(contents, userText);
+  // 1er appel Gemini (avec retry automatique sur limite minute)
+  let r = await callGeminiWithRetry(contents, userText);
   if(!r.ok){
     hideTyping();
     const msg = quotaMessage(r.status);
@@ -651,7 +746,7 @@ async function askClaude(userText){
       lastC.parts[0].text = userText +
         '\n\n[Informations web récentes — utilise-les, ignore le hors sujet]\n' + ctx;
     }
-    const r2 = await callGemini(contents, userText);
+    const r2 = await callGeminiWithRetry(contents, userText);
     if(r2.ok && r2.reply){
       reply = r2.reply.replace(/\[SEARCH:[^\]]+\]/ig,'').trim();
     }else{
@@ -976,7 +1071,9 @@ function renderSkills(){
    ============================================================ */
 function loadSettings(){
   document.getElementById('apikey').value = store.key;
+  document.getElementById('groqkey').value = store.groqKey;
   document.getElementById('tavilykey').value = store.tavilyKey;
+  document.getElementById('engine-select').value = store.engine;
   document.getElementById('contacts').value = store.contacts;
   document.getElementById('memofiche').value = store.memoFiche;
   document.getElementById('memomode').value = store.memoMode;
@@ -989,6 +1086,12 @@ function loadSettings(){
   document.getElementById('rate-val').textContent = store.voiceRate.toFixed(2);
   document.getElementById('pitch-val').textContent = store.voicePitch.toFixed(2);
   renderMemoryList();
+}
+// indicateur du moteur actif dans le header
+function updateStatus(){
+  const activeKey = store.engine==='groq' ? store.groqKey : store.key;
+  const label = store.engine==='groq' ? 'Groq' : 'Gemini';
+  document.getElementById('sys-status').textContent = activeKey ? label : (label+' • clé manquante');
 }
 // affichage live des valeurs pendant qu'on bouge les curseurs
 document.getElementById('voice-rate').addEventListener('input',(e)=>{
@@ -1006,7 +1109,9 @@ document.getElementById('test-voice-btn').addEventListener('click',()=>{
 });
 document.getElementById('save-btn').addEventListener('click',()=>{
   store.key = document.getElementById('apikey').value.trim();
+  store.groqKey = document.getElementById('groqkey').value.trim();
   store.tavilyKey = document.getElementById('tavilykey').value.trim();
+  store.engine = document.getElementById('engine-select').value;
   store.contacts = document.getElementById('contacts').value.trim();
   store.memoFiche = document.getElementById('memofiche').value.trim();
   store.memoMode = document.getElementById('memomode').value;
@@ -1017,7 +1122,7 @@ document.getElementById('save-btn').addEventListener('click',()=>{
   const f=document.getElementById('save-flash');
   f.textContent='✓ enregistré';
   setTimeout(()=>f.textContent='',1800);
-  document.getElementById('sys-status').textContent = store.key?'prêt':'clé manquante';
+  updateStatus();
   renderSkills(); // rafraîchit l'état du toggle recherche selon la clé Tavily
 });
 document.getElementById('clear-btn').addEventListener('click',()=>{
@@ -1037,7 +1142,8 @@ function maybeAutoListen(){
   const params = new URLSearchParams(location.search);
   if(params.get('go')!=='1') return;
   if(!SR) return;
-  if(!store.key){
+  const autoKey = store.engine==='groq' ? store.groqKey : store.key;
+  if(!autoKey){
     addMsg('system','Auto-écoute demandée mais aucune clé API. Ouvre Réglages.', false);
     return;
   }
@@ -1069,7 +1175,7 @@ document.getElementById('new-conv-btn').addEventListener('click',()=>{
 restoreHistory();
 renderSkills();
 loadSettings();
-document.getElementById('sys-status').textContent = store.key?'prêt':'clé manquante';
+updateStatus();
 maybeAutoListen();
 </script>
 </body>
