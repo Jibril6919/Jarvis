@@ -217,6 +217,10 @@
       </svg>
     </div>
     <div class="core-label" id="core-label">appuie pour parler</div>
+    <button id="handsfree-btn" style="margin-top:14px;background:none;border:1px solid var(--edge);color:var(--text-dim);border-radius:20px;padding:7px 16px;font-family:inherit;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;cursor:pointer;display:flex;align-items:center;gap:7px;">
+      <span id="hf-dot" style="width:7px;height:7px;border-radius:50%;background:var(--text-dim);"></span>
+      <span id="hf-label">Mains-libres</span>
+    </button>
   </div>
 </section>
 
@@ -860,7 +864,7 @@ function handleActions(reply){
   return { text: cleaned, acted:false };
 }
 const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-let recog = null, listening = false;
+let recog = null, listening = false, handsFree = false;
 const coreEl = document.getElementById('core');
 const coreLabel = document.getElementById('core-label');
 const heardEl = document.getElementById('heard');
@@ -893,7 +897,14 @@ if(SR){
       addMsg('system','Micro refusé. Autorise le micro dans les réglages Safari.', false);
     }
   };
-  recog.onend=()=>{ listening=false; if(coreEl.classList.contains('listening')) setCore('idle','appuie pour parler'); };
+  recog.onend=()=>{
+    listening=false;
+    if(coreEl.classList.contains('listening')) setCore('idle', handsFree?'à toi…':'appuie pour parler');
+    // En mains-libres, si le micro s'est coupé (silence) sans qu'on parle/traite, on relance.
+    if(handsFree && !speaking){
+      setTimeout(()=>{ if(handsFree && !listening && !speaking){ try{ recog.start(); }catch(e){} } }, 400);
+    }
+  };
 }else{
   coreLabel.textContent='vocal non supporté';
 }
@@ -916,6 +927,33 @@ coreEl.addEventListener('click',()=>{
   if(speaking){ stopSpeak(); }
   if(listening){ recog.stop(); return; }
   try{ recog.start(); }catch(e){}
+});
+
+// Bouton mains-libres : active/désactive l'écoute continue automatique.
+const handsfreeBtn = document.getElementById('handsfree-btn');
+handsfreeBtn.addEventListener('click',()=>{
+  unlockAudio(); // le tap autorise aussi l'audio iOS
+  handsFree = !handsFree;
+  const dot = document.getElementById('hf-dot');
+  const label = document.getElementById('hf-label');
+  if(handsFree){
+    handsfreeBtn.style.borderColor = 'var(--ok)';
+    handsfreeBtn.style.color = 'var(--ok)';
+    dot.style.background = 'var(--ok)';
+    dot.style.boxShadow = '0 0 8px var(--ok)';
+    label.textContent = 'Mains-libres ON';
+    addMsg('system','Mode mains-libres activé. Parle, je réécoute après chaque réponse. Re-appuie pour arrêter.', false);
+    // démarre l'écoute tout de suite
+    if(!listening && !speaking){ try{ recog.start(); }catch(e){} }
+  }else{
+    handsfreeBtn.style.borderColor = 'var(--edge)';
+    handsfreeBtn.style.color = 'var(--text-dim)';
+    dot.style.background = 'var(--text-dim)';
+    dot.style.boxShadow = 'none';
+    label.textContent = 'Mains-libres';
+    if(listening){ try{ recog.stop(); }catch(e){} }
+    setCore('idle','appuie pour parler');
+  }
 });
 
 /* ============================================================
@@ -977,7 +1015,14 @@ function speak(text){
   let idx=0;
   const speakNext=()=>{
     if(idx>=sentences.length){
-      speaking=false; setCore('idle','appuie pour parler');
+      speaking=false;
+      // Mode mains-libres : on relance l'écoute automatiquement après la réponse
+      if(handsFree && SR){
+        setCore('idle','à toi…');
+        setTimeout(()=>{ if(handsFree && !listening && !speaking){ try{ recog.start(); }catch(e){} } }, 500);
+      }else{
+        setCore('idle','appuie pour parler');
+      }
       return;
     }
     const u=new SpeechSynthesisUtterance(sentences[idx]);
