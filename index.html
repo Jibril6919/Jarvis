@@ -241,6 +241,13 @@
           <option value="groq">Groq — rapide, gros quota (qualité un cran en dessous)</option>
         </select>
       </div>
+      <div class="field" style="margin-top:10px;">
+        <label>Modèle Groq (si moteur = Groq)</label>
+        <select id="groqmodel-select">
+          <option value="openai/gpt-oss-20b">GPT-OSS 20B — rapide, gros quota (volume)</option>
+          <option value="openai/gpt-oss-120b">GPT-OSS 120B — puissant (quota plus serré)</option>
+        </select>
+      </div>
       <p class="hint" style="margin-top:10px;">Clés stockées uniquement sur cet appareil. Gemini : aistudio.google.com. Groq : console.groq.com. Tavily : tavily.com. Aucune carte bancaire requise.</p>
       <div class="field" style="margin-top:10px;">
         <label>Clé API Google Gemini</label>
@@ -374,6 +381,8 @@ const store = {
   set tavilyKey(v){ localStorage.setItem('jarvis_tavily', v); },
   get groqKey(){ return localStorage.getItem('jarvis_groq') || ''; },
   set groqKey(v){ localStorage.setItem('jarvis_groq', v); },
+  get groqModel(){ return localStorage.getItem('jarvis_groqmodel') || 'openai/gpt-oss-20b'; },
+  set groqModel(v){ localStorage.setItem('jarvis_groqmodel', v); },
   get engine(){ return localStorage.getItem('jarvis_engine') || 'gemini'; }, // 'gemini' | 'groq'
   set engine(v){ localStorage.setItem('jarvis_engine', v); },
   get contacts(){ return localStorage.getItem('jarvis_contacts') || ''; },
@@ -614,9 +623,6 @@ async function callGemini(contents, userText){
   }
 }
 
-// Modèle Groq utilisé (le plus permissif en quota gratuit + rapide).
-const GROQ_MODEL = 'llama-3.1-8b-instant';
-
 // Appel à l'API Groq (format OpenAI). Convertit l'historique format Gemini
 // vers le format Groq, avec le system prompt en premier message.
 async function callGroq(contents, systemText){
@@ -639,7 +645,7 @@ async function callGroq(contents, systemText){
         'Authorization':'Bearer '+key
       },
       body:JSON.stringify({
-        model: GROQ_MODEL,
+        model: store.groqModel,
         messages,
         max_tokens: 1024,
         temperature: 0.9
@@ -658,26 +664,6 @@ async function callGroq(contents, systemText){
     console.error('Groq:',e);
     return { ok:false, status:0 };
   }
-}
-
-// Enveloppe callGemini avec un retry automatique sur la limite par minute (429).
-// Attend de plus en plus longtemps entre les tentatives, puis abandonne.
-async function callGeminiWithRetry(contents, userText){
-  const delays = [3000, 6000, 10000]; // 3s, 6s, 10s
-  let last = { ok:false, status:0 };
-  for(let attempt=0; attempt<=delays.length; attempt++){
-    const r = await callGemini(contents, userText);
-    if(r.ok) return r;
-    last = r;
-    // on ne réessaie que sur 429 (limite de débit). Les autres erreurs sont définitives.
-    if(r.status!==429) return r;
-    if(attempt < delays.length){
-      setCore('idle','je patiente…');
-      addMsg('system','Limite momentanée atteinte, je patiente '+(delays[attempt]/1000)+'s…', false);
-      await sleep(delays[attempt]);
-    }
-  }
-  return last;
 }
 
 // Traduit un code d'erreur HTTP en message clair (et indique quel quota).
@@ -721,8 +707,8 @@ async function askClaude(userText){
   // Construit l'historique (avec règle de nouvelle conversation par inactivité)
   let contents = buildContents(userText);
 
-  // 1er appel Gemini (avec retry automatique sur limite minute)
-  let r = await callGeminiWithRetry(contents, userText);
+  // 1er appel au moteur
+  let r = await callGemini(contents, userText);
   if(!r.ok){
     hideTyping();
     const msg = quotaMessage(r.status);
@@ -746,7 +732,7 @@ async function askClaude(userText){
       lastC.parts[0].text = userText +
         '\n\n[Informations web récentes — utilise-les, ignore le hors sujet]\n' + ctx;
     }
-    const r2 = await callGeminiWithRetry(contents, userText);
+    const r2 = await callGemini(contents, userText);
     if(r2.ok && r2.reply){
       reply = r2.reply.replace(/\[SEARCH:[^\]]+\]/ig,'').trim();
     }else{
@@ -1074,6 +1060,7 @@ function loadSettings(){
   document.getElementById('groqkey').value = store.groqKey;
   document.getElementById('tavilykey').value = store.tavilyKey;
   document.getElementById('engine-select').value = store.engine;
+  document.getElementById('groqmodel-select').value = store.groqModel;
   document.getElementById('contacts').value = store.contacts;
   document.getElementById('memofiche').value = store.memoFiche;
   document.getElementById('memomode').value = store.memoMode;
@@ -1112,6 +1099,7 @@ document.getElementById('save-btn').addEventListener('click',()=>{
   store.groqKey = document.getElementById('groqkey').value.trim();
   store.tavilyKey = document.getElementById('tavilykey').value.trim();
   store.engine = document.getElementById('engine-select').value;
+  store.groqModel = document.getElementById('groqmodel-select').value;
   store.contacts = document.getElementById('contacts').value.trim();
   store.memoFiche = document.getElementById('memofiche').value.trim();
   store.memoMode = document.getElementById('memomode').value;
