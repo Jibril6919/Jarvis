@@ -99,32 +99,24 @@
     max-width:90%;text-align:center;font-style:italic;
   }
   .core{
-    position:relative;width:108px;height:108px;border-radius:50%;
+    position:relative;width:210px;height:210px;border-radius:50%;
     display:flex;align-items:center;justify-content:center;cursor:pointer;
-    border:1px solid var(--edge);background:radial-gradient(circle at 50% 40%,rgba(56,225,255,0.10),transparent 70%);
     transition:transform .15s;
   }
-  .core:active{transform:scale(0.94);}
-  .core .ring{
-    position:absolute;inset:0;border-radius:50%;border:1px solid var(--cyan-dim);opacity:0.5;
-  }
-  .core.idle .ring{animation:rot 14s linear infinite;}
-  .core .ring:nth-child(2){inset:10px;border-color:rgba(56,225,255,0.12);animation-direction:reverse;animation-duration:9s;}
-  @keyframes rot{to{transform:rotate(360deg)}}
-  .core .glyph{
-    width:42px;height:42px;color:var(--cyan);z-index:2;
-    filter:drop-shadow(0 0 8px rgba(56,225,255,0.6));
-  }
-  .core.listening{border-color:var(--gold);background:radial-gradient(circle at 50% 40%,rgba(245,196,81,0.18),transparent 70%);}
-  .core.listening .glyph{color:var(--gold);filter:drop-shadow(0 0 10px rgba(245,196,81,0.7));}
-  .core.listening::before{
-    content:"";position:absolute;inset:-8px;border-radius:50%;
-    border:2px solid var(--gold);opacity:0;animation:sonar 1.4s infinite;
-  }
-  .core.speaking{border-color:var(--ok);}
-  .core.speaking .glyph{color:var(--ok);}
-  @keyframes sonar{0%{transform:scale(.9);opacity:.7}100%{transform:scale(1.5);opacity:0}}
+  .core:active{transform:scale(0.96);}
+  #sphere-canvas{width:100%;height:100%;display:block;}
   .core-label{font-size:9px;letter-spacing:0.22em;text-transform:uppercase;color:var(--text-dim);}
+  @keyframes rot{to{transform:rotate(360deg)}}
+  @keyframes sonar{0%{transform:scale(.9);opacity:.7}100%{transform:scale(1.5);opacity:0}}
+
+  /* Indicateurs HUD réels autour de la sphère */
+  /* Écran épuré : indicateurs HUD masqués (choix utilisateur) */
+  .hud-tele{display:none !important;position:absolute;top:74px;flex-direction:column;gap:16px;z-index:3;pointer-events:none;}
+  .hud-tele.left{left:16px;}
+  .hud-tele.right{right:16px;text-align:right;}
+  .hud-item{font-size:8px;letter-spacing:0.12em;color:var(--text-dim);text-transform:uppercase;}
+  .hud-item b{display:block;font-size:12px;color:var(--cyan);letter-spacing:0.04em;margin-top:3px;font-weight:600;
+    text-shadow:0 0 8px rgba(56,225,255,0.4);}
 
   /* ---------- SKILLS VIEW ---------- */
   .skills-head{padding:18px 18px 6px;}
@@ -189,9 +181,25 @@
   nav button svg{width:20px;height:20px;}
   nav button.active{color:var(--cyan);}
   nav button.active svg{filter:drop-shadow(0 0 6px rgba(56,225,255,0.6));}
+
+  /* Animation de démarrage — Boot C (logo qui pulse, épuré) */
+  #boot{position:fixed;inset:0;z-index:200;background:var(--bg);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    transition:opacity .7s;}
+  #boot.gone{opacity:0;pointer-events:none;}
+  .boot-logo{font-size:24px;letter-spacing:0.42em;color:var(--cyan);
+    text-shadow:0 0 22px rgba(56,225,255,0.7);animation:bootpulse 1.6s ease-in-out infinite;}
+  @keyframes bootpulse{0%,100%{opacity:.5;transform:scale(.97)}50%{opacity:1;transform:scale(1.02)}}
+  .boot-sub{font-size:9px;letter-spacing:0.28em;color:#3a6478;text-transform:uppercase;}
 </style>
 </head>
 <body>
+
+<!-- Animation de démarrage — Boot C -->
+<div id="boot">
+  <div class="boot-logo">J.A.R.V.I.S</div>
+  <div class="boot-sub">Initialisation du noyau</div>
+</div>
 
 <header>
   <div class="brand">
@@ -207,14 +215,24 @@
 <!-- ============ VUE CONVERSATION ============ -->
 <section class="view active" id="view-talk">
   <div id="log"></div>
+
+  <!-- Indicateurs HUD réels (gauche/droite) -->
+  <div class="hud-tele left">
+    <div class="hud-item">Moteur<b id="hud-engine">—</b></div>
+    <div class="hud-item">Latence<b id="hud-latency">—</b></div>
+    <div class="hud-item">Mémoire<b id="hud-memory">—</b></div>
+  </div>
+  <div class="hud-tele right">
+    <div class="hud-item">Statut<b id="hud-status">—</b></div>
+    <div class="hud-item">Recherche<b id="hud-search">—</b></div>
+    <div class="hud-item">Échanges<b id="hud-msgs">0</b></div>
+  </div>
+
   <div class="core-wrap">
     <div class="heard" id="heard"></div>
+    <!-- La sphère Three.js vit ici ; id="core" conservé pour les clics + setCore -->
     <div class="core idle" id="core">
-      <div class="ring"></div><div class="ring"></div>
-      <svg class="glyph" id="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/>
-      </svg>
+      <canvas id="sphere-canvas"></canvas>
     </div>
     <div class="core-label" id="core-label">appuie pour parler</div>
     <button id="handsfree-btn" style="margin-top:14px;background:none;border:1px solid var(--edge);color:var(--text-dim);border-radius:20px;padding:7px 16px;font-family:inherit;font-size:10px;letter-spacing:0.12em;text-transform:uppercase;cursor:pointer;display:flex;align-items:center;gap:7px;">
@@ -711,6 +729,7 @@ async function askClaude(userText){
   // Construit l'historique (avec règle de nouvelle conversation par inactivité)
   let contents = buildContents(userText);
 
+  const _t0 = performance.now(); // chrono latence
   // 1er appel au moteur
   let r = await callGemini(contents, userText);
   if(!r.ok){
@@ -756,6 +775,7 @@ async function askClaude(userText){
   addMsg('assistant', result.text);
   lastReply = result.text; // mémorise pour la commande "répète"
   speak(result.text);
+  updateHUD(Math.round(performance.now() - _t0)); // latence réelle + rafraîchit les indicateurs
 
   // mémorise l'heure du dernier échange (pour la détection de session)
   localStorage.setItem('jarvis_lastmsg', String(Date.now()));
@@ -1209,7 +1229,154 @@ restoreHistory();
 renderSkills();
 loadSettings();
 updateStatus();
+/* ============================================================
+   ANIMATION DE DÉMARRAGE + INDICATEURS HUD RÉELS
+   ============================================================ */
+// Le boot disparaît après l'animation
+setTimeout(()=>{ const b=document.getElementById('boot'); if(b) b.classList.add('gone'); }, 2700);
+
+// Met à jour les indicateurs réels du HUD
+function updateHUD(latencyMs){
+  const eng = store.engine==='groq'
+    ? (store.groqModel.includes('120') ? 'GROQ 120B' : 'GROQ 20B')
+    : 'GEMINI';
+  const setT = (id,val)=>{ const e=document.getElementById(id); if(e) e.textContent=val; };
+  setT('hud-engine', eng);
+  const activeKey = store.engine==='groq' ? store.groqKey : store.key;
+  setT('hud-status', activeKey ? 'EN LIGNE' : 'NO KEY');
+  setT('hud-search', searchEnabled() ? 'ON' : 'OFF');
+  setT('hud-memory', String(store.memoAuto.length));
+  setT('hud-msgs', String(Math.floor(store.history.length/2)));
+  if(latencyMs!==undefined){
+    setT('hud-latency', latencyMs<1000 ? latencyMs+'ms' : (latencyMs/1000).toFixed(1)+'s');
+  }
+}
+
 maybeAutoListen();
+updateHUD();
+</script>
+
+<!-- ============ SPHÈRE DE PARTICULES (Three.js) ============ -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function(){
+  if(!window.THREE){ console.warn('Three.js non chargé'); return; }
+  const canvas = document.getElementById('sphere-canvas');
+  if(!canvas) return;
+
+  const PARTICLE_COUNT = 6500; // densité (allégée pour mobile, reste fluide)
+  const RADIUS = 2.0;
+  let scene, camera, renderer, particles, clock;
+  let mode = 'idle'; // idle | listening | speaking
+
+  // Couleurs par état (cyan / doré / vert)
+  const COLORS = {
+    idle:      new THREE.Color(0x38e1ff),
+    listening: new THREE.Color(0xf5c451),
+    speaking:  new THREE.Color(0x3ddc97)
+  };
+
+  function circleTexture(){
+    const c=document.createElement('canvas'); c.width=c.height=64;
+    const ctx=c.getContext('2d');
+    const g=ctx.createRadialGradient(32,32,0,32,32,32);
+    g.addColorStop(0,'rgba(255,255,255,1)');
+    g.addColorStop(0.3,'rgba(180,240,255,0.85)');
+    g.addColorStop(1,'rgba(56,225,255,0)');
+    ctx.fillStyle=g; ctx.fillRect(0,0,64,64);
+    const t=new THREE.Texture(c); t.needsUpdate=true; return t;
+  }
+
+  function size(){
+    const r = canvas.getBoundingClientRect();
+    return { w: r.width||210, h: r.height||210 };
+  }
+
+  function init(){
+    const {w,h}=size();
+    scene=new THREE.Scene();
+    camera=new THREE.PerspectiveCamera(60, w/h, 0.1, 100);
+    camera.position.z=5.2;
+    renderer=new THREE.WebGLRenderer({canvas, antialias:true, alpha:true});
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio,2));
+    renderer.setSize(w,h,false);
+    clock=new THREE.Clock();
+
+    const positions=new Float32Array(PARTICLE_COUNT*3);
+    const original=new Float32Array(PARTICLE_COUNT*3);
+    const randoms=new Float32Array(PARTICLE_COUNT);
+    for(let i=0;i<PARTICLE_COUNT;i++){
+      const u=Math.random(), v=Math.random();
+      const theta=2*Math.PI*u, phi=Math.acos(2*v-1);
+      const rr=RADIUS*(0.92+Math.random()*0.12);
+      const x=rr*Math.sin(phi)*Math.cos(theta);
+      const y=rr*Math.sin(phi)*Math.sin(theta);
+      const z=rr*Math.cos(phi);
+      positions[i*3]=x; positions[i*3+1]=y; positions[i*3+2]=z;
+      original[i*3]=x; original[i*3+1]=y; original[i*3+2]=z;
+      randoms[i]=Math.random();
+    }
+    const geo=new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(positions,3));
+    geo.userData.original=original; geo.userData.randoms=randoms;
+
+    const sprite=circleTexture();
+    const mat=new THREE.PointsMaterial({size:0.045, map:sprite, transparent:true,
+      blending:THREE.AdditiveBlending, depthWrite:false, color:COLORS.idle.clone()});
+    particles=new THREE.Points(geo, mat);
+    scene.add(particles);
+
+    window.addEventListener('resize', onResize);
+    animate();
+  }
+
+  function onResize(){
+    const {w,h}=size();
+    camera.aspect=w/h; camera.updateProjectionMatrix();
+    renderer.setSize(w,h,false);
+  }
+
+  function animate(){
+    requestAnimationFrame(animate);
+    if(!particles) return;
+    const t=clock.getElapsedTime();
+    const live = (mode!=='idle');
+    const spin = live?0.4:0.12;
+    particles.rotation.y += spin*0.016;
+    particles.rotation.x = Math.sin(t*0.15)*0.12;
+
+    // couleur cible selon l'état (transition douce)
+    const target = COLORS[mode]||COLORS.idle;
+    particles.material.color.lerp(target, 0.08);
+
+    const pos=particles.geometry.attributes.position.array;
+    const orig=particles.geometry.userData.original;
+    const rnd=particles.geometry.userData.randoms;
+    const amp = live?0.16:0.06;
+    const freq = live?3:1.5;
+    for(let i=0;i<PARTICLE_COUNT;i++){
+      const i3=i*3;
+      const wave=Math.sin(t*freq + rnd[i]*6.28)*amp*rnd[i];
+      const scale=1+wave*0.14;
+      pos[i3]=orig[i3]*scale; pos[i3+1]=orig[i3+1]*scale; pos[i3+2]=orig[i3+2]*scale;
+    }
+    particles.geometry.attributes.position.needsUpdate=true;
+    renderer.render(scene,camera);
+  }
+
+  // Lien avec l'état de l'app : on observe la classe de #core (idle/listening/speaking)
+  const coreEl=document.getElementById('core');
+  function syncMode(){
+    if(coreEl.classList.contains('listening')) mode='listening';
+    else if(coreEl.classList.contains('speaking')) mode='speaking';
+    else mode='idle';
+  }
+  const obs=new MutationObserver(syncMode);
+  obs.observe(coreEl, {attributes:true, attributeFilter:['class']});
+
+  init();
+  syncMode();
+})();
 </script>
 </body>
 </html>
