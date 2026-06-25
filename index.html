@@ -383,13 +383,33 @@ const ACTION_INSTRUCTIONS =
 `
 
 CAPACITÉS D'ACTION : tu peux contrôler l'iPhone de Jibril. Quand il demande une action, termine ta réponse parlée par UN marqueur d'action sur la même ligne, au format exact [ACTION:type:valeur]. Le marqueur ne sera pas lu à voix haute. Types disponibles :
-- [ACTION:call:NUMERO] — passer un appel. Ex: "J'appelle. [ACTION:call:0612345678]"
-- [ACTION:sms:NUMERO|MESSAGE] — SMS pré-rempli (ou [ACTION:sms:MESSAGE] sans numéro).
-- [ACTION:maps:LIEU] — ouvrir Plans. Ex: "[ACTION:maps:Tour Eiffel Paris]"
-- [ACTION:web:URL] — ouvrir une page web. Ex: "[ACTION:web:youtube.com]"
-- [ACTION:mail:DEST|SUJET|CORPS] — mail pré-rempli (sujet et corps optionnels).
+Communication :
+- [ACTION:call:NUMERO] — appeler. Ex: "J'appelle. [ACTION:call:0612345678]"
 - [ACTION:facetime:NUMERO] — appel FaceTime.
-- [ACTION:shortcut:NOM] ou [ACTION:shortcut:NOM|TEXTE] — lancer un raccourci iOS créé par Jibril. Ex: "Je le lance. [ACTION:shortcut:Minuteur 10 min]"
+- [ACTION:sms:NUMERO|MESSAGE] — SMS pré-rempli (ou [ACTION:sms:MESSAGE] sans numéro).
+- [ACTION:mail:DEST|SUJET|CORPS] — mail pré-rempli (sujet/corps optionnels).
+- [ACTION:whatsapp:NUMERO|MESSAGE] — message WhatsApp pré-rempli.
+Navigation :
+- [ACTION:maps:LIEU] — chercher un lieu dans Plans. Ex: "[ACTION:maps:boulangerie Lyon]"
+- [ACTION:directions:DESTINATION] — itinéraire vers un lieu. Ex: "[ACTION:directions:Gare Part-Dieu Lyon]"
+- [ACTION:waze:LIEU] — naviguer avec Waze.
+Recherches web (ouvre directement les résultats) :
+- [ACTION:google:RECHERCHE] — chercher sur Google. Ex: "[ACTION:google:météo Lyon demain]"
+- [ACTION:youtube:RECHERCHE] — chercher sur YouTube. Ex: "Je lance la recherche. [ACTION:youtube:tuto pompes]"
+- [ACTION:images:RECHERCHE] — chercher des images.
+- [ACTION:wikipedia:SUJET] — chercher sur Wikipédia.
+- [ACTION:amazon:PRODUIT] — chercher un produit sur Amazon.
+- [ACTION:translate:TEXTE] — traduire un texte (vers le français).
+- [ACTION:news:SUJET] — chercher dans l'actualité.
+- [ACTION:web:URL] — ouvrir une page web précise. Ex: "[ACTION:web:github.com]"
+Musique :
+- [ACTION:spotify:RECHERCHE] — chercher sur Spotify (artiste, titre, playlist). Ex: "[ACTION:spotify:Daft Punk]"
+Apps / système :
+- [ACTION:appstore:NOM] — chercher une app sur l'App Store.
+- [ACTION:settings:] — ouvrir les Réglages iOS (laisse vide après les deux-points).
+- [ACTION:shortcut:NOM] ou [ACTION:shortcut:NOM|TEXTE] — lancer un raccourci iOS créé par Jibril. Ex: "[ACTION:shortcut:Minuteur 10 min]"
+
+Choisis le type le PLUS adapté : "cherche X sur YouTube" → youtube ; "joue X" → spotify ; "emmène-moi à X" → directions ; "cherche X" (général) → google. Réponds toujours par une courte phrase parlée AVANT le marqueur.
 
 MÉMOIRE LONGUE : tu peux retenir des infos durables uniquement quand Jibril le demande explicitement ("retiens que...", "souviens-toi que...", "note que...") et en oublier quand il le demande ("oublie que...", "supprime...").
 - Pour retenir : termine par [MEMO:ADD:l'information à retenir, formulée de façon concise]. Ex: "C'est noté. [MEMO:ADD:anniversaire de Djamila le 12 mai]"
@@ -791,38 +811,59 @@ async function askClaude(userText){
 // Construit le lien iOS correspondant à une action.
 function buildActionURL(type, value){
   value = (value||'').trim();
+  const enc = encodeURIComponent(value);
   switch(type){
-    case 'call':      // appeler un numéro
-      return 'tel:'+encodeURIComponent(value);
-    case 'sms':       // SMS pré-rempli — format "numéro|message" ou juste "message"
-      {
-        const parts = value.split('|');
-        if(parts.length===2) return 'sms:'+encodeURIComponent(parts[0].trim())+'&body='+encodeURIComponent(parts[1].trim());
-        return 'sms:&body='+encodeURIComponent(value);
-      }
-    case 'maps':      // ouvrir Plans sur un lieu
-      return 'maps://?q='+encodeURIComponent(value);
-    case 'web':       // ouvrir une page web
-      return value.startsWith('http') ? value : 'https://'+value;
-    case 'facetime':
-      return 'facetime:'+encodeURIComponent(value);
-    case 'mail':      // mail pré-rempli — "destinataire|sujet|corps" (champs optionnels)
-      {
-        const p = value.split('|');
-        let u = 'mailto:'+encodeURIComponent(p[0]||'');
-        const q=[];
-        if(p[1]) q.push('subject='+encodeURIComponent(p[1]));
-        if(p[2]) q.push('body='+encodeURIComponent(p[2]));
-        if(q.length) u += '?'+q.join('&');
-        return u;
-      }
-    case 'shortcut':  // lancer un Raccourci iOS par son nom — "Nom" ou "Nom|texte d'entrée"
-      {
-        const p = value.split('|');
-        let u = 'shortcuts://run-shortcut?name='+encodeURIComponent(p[0].trim());
-        if(p[1]) u += '&input=text&text='+encodeURIComponent(p[1].trim());
-        return u;
-      }
+    // --- Communication ---
+    case 'call':      return 'tel:'+enc;
+    case 'facetime':  return 'facetime:'+enc;
+    case 'sms': {
+      const parts = value.split('|');
+      if(parts.length===2) return 'sms:'+encodeURIComponent(parts[0].trim())+'&body='+encodeURIComponent(parts[1].trim());
+      return 'sms:&body='+enc;
+    }
+    case 'mail': {
+      const p = value.split('|');
+      let u = 'mailto:'+encodeURIComponent(p[0]||'');
+      const q=[];
+      if(p[1]) q.push('subject='+encodeURIComponent(p[1]));
+      if(p[2]) q.push('body='+encodeURIComponent(p[2]));
+      if(q.length) u += '?'+q.join('&');
+      return u;
+    }
+    case 'whatsapp': { // "numéro|message" ou "message"
+      const p = value.split('|');
+      if(p.length===2) return 'https://wa.me/'+encodeURIComponent(p[0].replace(/[^0-9]/g,''))+'?text='+encodeURIComponent(p[1].trim());
+      return 'https://wa.me/?text='+enc;
+    }
+
+    // --- Navigation / lieux ---
+    case 'maps':      return 'maps://?q='+enc;                                  // chercher un lieu
+    case 'directions':return 'http://maps.apple.com/?daddr='+enc;              // itinéraire vers
+    case 'waze':      return 'https://waze.com/ul?q='+enc;
+
+    // --- Recherches web ---
+    case 'web':       return value.startsWith('http') ? value : 'https://'+value;
+    case 'google':    return 'https://www.google.com/search?q='+enc;
+    case 'youtube':   return 'https://www.youtube.com/results?search_query='+enc;
+    case 'images':    return 'https://www.google.com/search?tbm=isch&q='+enc;
+    case 'wikipedia': return 'https://fr.wikipedia.org/wiki/Special:Search?search='+enc;
+    case 'amazon':    return 'https://www.amazon.fr/s?k='+enc;
+    case 'translate': return 'https://translate.google.com/?sl=auto&tl=fr&text='+enc+'&op=translate';
+    case 'news':      return 'https://news.google.com/search?q='+enc+'&hl=fr';
+
+    // --- Musique (Spotify) ---
+    case 'spotify':   return 'https://open.spotify.com/search/'+enc;
+
+    // --- Apps / système iOS ---
+    case 'appstore':  return 'https://search.itunes.apple.com/WebObjects/MZContentLink.woa/wa/search?media=software&term='+enc;
+    case 'settings':  return 'App-Prefs:'+value;   // ex: "App-Prefs:" ou "App-Prefs:root=WIFI"
+    case 'shortcut': {
+      const p = value.split('|');
+      let u = 'shortcuts://run-shortcut?name='+encodeURIComponent(p[0].trim());
+      if(p[1]) u += '&input=text&text='+encodeURIComponent(p[1].trim());
+      return u;
+    }
+
     default: return null;
   }
 }
